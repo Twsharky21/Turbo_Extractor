@@ -38,6 +38,7 @@ class SheetConfig:
     """
     name: str = "Sheet1"                  # UI label + workbook sheet name (Option A contract)
     workbook_sheet: str = "Sheet1"        # actual workbook sheet to read (same as name under Option A)
+    source_start_row: str = ""            # blank means start at row 1; otherwise 1-based row offset into source
     columns_spec: str = ""                # blank means ALL used columns
     rows_spec: str = ""                   # blank means ALL used rows
     paste_mode: Literal["pack", "keep"] = "pack"

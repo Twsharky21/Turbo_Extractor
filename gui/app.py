@@ -117,16 +117,21 @@ class TurboExtractorApp(tk.Tk):
         ttk.Entry(sheet_box, textvariable=self.rows_var).grid(row=1, column=1, sticky="ew")
         self.rows_var.trace_add("write", self._push_editor_to_sheet)
 
-        ttk.Label(sheet_box, text="Paste Mode:").grid(row=2, column=0, sticky="w")
+        ttk.Label(sheet_box, text="Source Start Row:").grid(row=2, column=0, sticky="w")
+        self.source_start_row_var = tk.StringVar()
+        ttk.Entry(sheet_box, textvariable=self.source_start_row_var, width=10).grid(row=2, column=1, sticky="w")
+        self.source_start_row_var.trace_add("write", self._push_editor_to_sheet)
+
+        ttk.Label(sheet_box, text="Paste Mode:").grid(row=3, column=0, sticky="w")
         self.paste_var = tk.StringVar()
         self.paste_combo = ttk.Combobox(sheet_box, textvariable=self.paste_var, values=["pack", "keep"], state="readonly")
-        self.paste_combo.grid(row=2, column=1, sticky="ew")
+        self.paste_combo.grid(row=3, column=1, sticky="ew")
         self.paste_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
 
-        ttk.Label(sheet_box, text="Rules Combine:").grid(row=3, column=0, sticky="w")
+        ttk.Label(sheet_box, text="Rules Combine:").grid(row=4, column=0, sticky="w")
         self.combine_var = tk.StringVar()
         self.combine_combo = ttk.Combobox(sheet_box, textvariable=self.combine_var, values=["AND", "OR"], state="readonly")
-        self.combine_combo.grid(row=3, column=1, sticky="ew")
+        self.combine_combo.grid(row=4, column=1, sticky="ew")
         self.combine_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
 
         # Destination minimal (kept small for now)
@@ -652,6 +657,7 @@ class TurboExtractorApp(tk.Tk):
         return SheetConfig(
             name=name,
             workbook_sheet="Sheet1",
+            source_start_row="",
             columns_spec="",
             rows_spec="",
             paste_mode="pack",
@@ -670,6 +676,7 @@ class TurboExtractorApp(tk.Tk):
     def _load_sheet_into_editor(self, sheet: SheetConfig) -> None:
         self.columns_var.set(sheet.columns_spec)
         self.rows_var.set(sheet.rows_spec)
+        self.source_start_row_var.set(getattr(sheet, "source_start_row", ""))
         self.paste_var.set(sheet.paste_mode)
         self.combine_var.set(sheet.rules_combine)
 
@@ -683,6 +690,7 @@ class TurboExtractorApp(tk.Tk):
     def _clear_editor(self) -> None:
         self.columns_var.set("")
         self.rows_var.set("")
+        self.source_start_row_var.set("")
         self.paste_var.set("")
         self.combine_var.set("")
         self.dest_file_var.set("")
@@ -699,6 +707,7 @@ class TurboExtractorApp(tk.Tk):
 
         self.current_sheet.columns_spec = self.columns_var.get()
         self.current_sheet.rows_spec = self.rows_var.get()
+        self.current_sheet.source_start_row = self.source_start_row_var.get()
         if self.paste_var.get():
             self.current_sheet.paste_mode = self.paste_var.get()
         if self.combine_var.get():

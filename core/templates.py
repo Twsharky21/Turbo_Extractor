@@ -60,6 +60,7 @@ def apply_template_to_source(source: SourceConfig, template: Dict[str, Any]) -> 
             sheet = SheetConfig(
                 name=sh.get("name", "Sheet1"),
                 workbook_sheet=sh.get("workbook_sheet", sh.get("name", "Sheet1")),
+                source_start_row=sh.get("source_start_row", ""),
                 columns_spec=sh.get("columns_spec", ""),
                 rows_spec=sh.get("rows_spec", ""),
                 paste_mode=sh.get("paste_mode", "pack"),

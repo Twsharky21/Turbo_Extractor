@@ -16,6 +16,27 @@ from .planner import build_plan
 from .writer import apply_write_plan
 
 
+def _apply_source_start_row(table: List[List[Any]], source_start_row: str) -> List[List[Any]]:
+    """Apply a 1-based source start row offset.
+
+    Blank means no offset.
+    Row numbers in rows_spec are interpreted relative to the trimmed table.
+    """
+    s = (source_start_row or "").strip()
+    if not s:
+        return table
+    try:
+        n = int(s)
+    except ValueError:
+        raise AppError("BAD_SOURCE_START_ROW", f"Source Start Row must be a number (got '{source_start_row}')")
+    if n < 1:
+        raise AppError("BAD_SOURCE_START_ROW", f"Source Start Row must be >= 1 (got {n})")
+    offset = n - 1
+    if offset <= 0:
+        return table
+    return table[offset:]
+
+
 def _load_source_table(source_path: str, workbook_sheet: str) -> List[List[Any]]:
     ext = os.path.splitext(source_path)[1].lower()
     try:
@@ -49,6 +70,8 @@ def _get_or_create_sheet(wb: Workbook, name: str):
 
 def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Recipe") -> SheetResult:
     table = _load_source_table(source_path, sheet_cfg.workbook_sheet)
+
+    table = _apply_source_start_row(table, getattr(sheet_cfg, "source_start_row", ""))
 
     used_h, used_w = compute_used_range(table)
     table = normalize_table(table)

@@ -46,6 +46,7 @@ class ProjectConfig:
                     sheet = SheetConfig(
                         name=sh["name"],
                         workbook_sheet=sh["workbook_sheet"],
+                        source_start_row=sh.get("source_start_row", ""),
                         columns_spec=sh["columns_spec"],
                         rows_spec=sh["rows_spec"],
                         paste_mode=sh["paste_mode"],

@@ -3,34 +3,27 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from dataclasses import asdict
-from typing import List, Tuple, Optional
+from typing import Optional
 
-from core.engine import run_all, RunItem
-from core.errors import AppError
+from core.engine import run_all
+from core.project import ProjectConfig, SourceConfig, RecipeConfig
+from core.models import SheetConfig, Destination
 
 
 class TurboExtractorApp(tk.Tk):
     """
-    Minimal GUI shell (V3):
-    - Left: placeholder tree (Sources/Recipes/Sheets)
-    - Right: placeholder editor area
-    - Bottom-right: Run / Run All buttons
-    - Uses core.engine.run_all() for execution
-
-    This file is intentionally minimal and import-safe for pytest.
+    Minimal GUI wired to ProjectConfig.
+    Still intentionally thin — no full editor yet.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Excel Turbo Extractor V3 (Minimal GUI)")
+        self.title("Excel Turbo Extractor V3")
         self.minsize(1000, 650)
 
-        self._build_ui()
+        self.project: ProjectConfig = ProjectConfig()
 
-        # For now, we keep an in-memory run list (RunItem tuples).
-        # Later, this will be derived from the ProjectConfig tree.
-        self._run_items: List[RunItem] = []
+        self._build_ui()
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -42,7 +35,8 @@ class TurboExtractorApp(tk.Tk):
         root.columnconfigure(1, weight=3)
         root.rowconfigure(0, weight=1)
 
-        # Left panel: tree placeholder
+        # ----- LEFT TREE -----
+
         left = ttk.LabelFrame(root, text="Sources / Recipes / Sheets", padding=8)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         left.columnconfigure(0, weight=1)
@@ -50,85 +44,106 @@ class TurboExtractorApp(tk.Tk):
 
         self.tree = ttk.Treeview(left, show="tree", selectmode="browse")
         self.tree.grid(row=0, column=0, sticky="nsew")
+
         yscroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         yscroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=yscroll.set)
 
         btns = ttk.Frame(left)
         btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Button(btns, text="Add Source(s)...", command=self._add_sources_placeholder).pack(side="left")
-        ttk.Button(btns, text="Clear", command=self._clear_placeholder).pack(side="left", padx=(8, 0))
 
-        # Right panel: editor placeholder
-        right = ttk.LabelFrame(root, text="Editor (Selected Sheet)", padding=8)
+        ttk.Button(btns, text="New Project", command=self.new_project).pack(side="left")
+        ttk.Button(btns, text="Load Project", command=self.load_project).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Save Project", command=self.save_project).pack(side="left", padx=(8, 0))
+
+        # ----- RIGHT PANEL -----
+
+        right = ttk.LabelFrame(root, text="Project Info", padding=8)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
 
-        self.editor_text = tk.Text(right, height=10, wrap="word")
-        self.editor_text.grid(row=0, column=0, sticky="nsew")
-        self.editor_text.insert("1.0", "Minimal V3 GUI shell.\n\nNext steps:\n- Load/save ProjectConfig\n- Populate tree\n- Bind selection to editor\n- Build Sheet editor fields\n")
+        self.info_text = tk.Text(right, wrap="word")
+        self.info_text.grid(row=0, column=0, sticky="nsew")
+        self._refresh_info()
 
         bottom = ttk.Frame(right)
         bottom.grid(row=1, column=0, sticky="e", pady=(10, 0))
 
-        ttk.Button(bottom, text="Run Selected (TODO)", command=self._run_selected_placeholder).pack(side="right")
-        ttk.Button(bottom, text="Run All", command=self._run_all_now).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Run All", command=self.run_all_now).pack(side="right")
 
-    # ----- Placeholder actions (will be replaced by real ProjectConfig editing) -----
+    # ----- Project State -----
 
-    def _add_sources_placeholder(self) -> None:
-        paths = filedialog.askopenfilenames(
-            title="Add source file(s)",
-            filetypes=[("Excel/CSV", "*.xlsx *.xlsm *.csv"), ("All files", "*.*")]
+    def new_project(self) -> None:
+        self.project = ProjectConfig()
+        self._refresh_tree()
+        self._refresh_info()
+
+    def load_project(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Load Project",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
         )
-        if not paths:
+        if not path:
             return
 
-        # For minimal shell: add sources as tree nodes only; no recipes/sheets yet.
-        for p in paths:
-            self.tree.insert("", "end", text=p)
-        self.editor_text.insert("end", f"\nAdded {len(paths)} source(s) to tree (placeholder).\n")
+        self.project = ProjectConfig.load_json(path)
+        self._refresh_tree()
+        self._refresh_info()
 
-    def _clear_placeholder(self) -> None:
-        for item in self.tree.get_children(""):
-            self.tree.delete(item)
-        self._run_items.clear()
-        self.editor_text.insert("end", "\nCleared tree and run list.\n")
+    def save_project(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save Project",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if not path:
+            return
 
-    def _run_selected_placeholder(self) -> None:
-        messagebox.showinfo("Not implemented", "Run Selected is not implemented in the minimal shell yet.")
+        self.project.save_json(path)
+        messagebox.showinfo("Saved", f"Project saved to:\n{path}")
 
     # ----- Execution -----
 
-    def set_run_items(self, items: List[RunItem]) -> None:
-        """
-        Allows tests or future config loader to inject a run list.
-        """
-        self._run_items = list(items)
-
-    def _run_all_now(self) -> None:
-        if not self._run_items:
-            messagebox.showwarning(
-                "No run items",
-                "No run items are configured yet.\n\n"
-                "This is the minimal shell.\n"
-                "Next: tree->config wiring will build run items.",
-            )
+    def run_all_now(self) -> None:
+        items = self.project.build_run_items()
+        if not items:
+            messagebox.showwarning("Nothing to run", "Project has no sheets configured.")
             return
 
-        report = run_all(self._run_items)
+        report = run_all(items)
 
-        # Build a human-readable report
         lines = []
         for r in report.results:
             if r.error_code:
-                lines.append(f"❌ {r.source_path} | {r.recipe_name}/{r.sheet_name}: {r.error_code} - {r.error_message}")
+                lines.append(f"❌ {r.source_path} | {r.recipe_name}/{r.sheet_name}: {r.error_code}")
             else:
                 lines.append(f"✅ {r.source_path} | {r.recipe_name}/{r.sheet_name}: {r.rows_written} rows")
 
         title = "Run complete" if report.ok else "Run complete (with errors)"
-        messagebox.showinfo(title, "\n".join(lines) if lines else "(no results)")
+        messagebox.showinfo(title, "\n".join(lines))
+
+    # ----- UI Refresh -----
+
+    def _refresh_tree(self) -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for source in self.project.sources:
+            s_id = self.tree.insert("", "end", text=source.path)
+            for recipe in source.recipes:
+                r_id = self.tree.insert(s_id, "end", text=recipe.name)
+                for sheet in recipe.sheets:
+                    self.tree.insert(r_id, "end", text=sheet.name)
+
+    def _refresh_info(self) -> None:
+        self.info_text.delete("1.0", "end")
+        self.info_text.insert(
+            "1.0",
+            f"Sources: {len(self.project.sources)}\n\n"
+            "This is the minimal ProjectConfig-wired GUI.\n"
+            "Next: full sheet editor wiring.\n"
+        )
 
 
 def main() -> None:

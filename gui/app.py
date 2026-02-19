@@ -36,6 +36,12 @@ class TurboExtractorApp(tk.Tk):
         self.current_source_path: Optional[str] = None
         self.current_recipe_name: Optional[str] = None
 
+        # Inline rename state
+        self._rename_entry: Optional[ttk.Entry] = None
+        self._rename_item_id: Optional[str] = None
+        self._rename_path: Optional[list[int]] = None
+        self._rename_kind: Optional[str] = None  # 'recipe' | 'sheet'
+
         # Autosave state
         self._autosave_dirty: bool = False
         self._autosave_after_id: Optional[str] = None
@@ -181,6 +187,16 @@ class TurboExtractorApp(tk.Tk):
         self._source_menu.add_command(label="Reset Default", command=self._ctx_reset_default)
         self._ctx_source_index: Optional[int] = None
 
+        # Context menu (Recipe)
+        self._recipe_menu = tk.Menu(self, tearoff=0)
+        self._recipe_menu.add_command(label="Rename Recipe", command=self._ctx_rename_recipe)
+        self._ctx_recipe_path: Optional[list[int]] = None
+
+        # Context menu (Sheet)
+        self._sheet_menu = tk.Menu(self, tearoff=0)
+        self._sheet_menu.add_command(label="Rename Sheet", command=self._ctx_rename_sheet)
+        self._ctx_sheet_path: Optional[list[int]] = None
+
         # Run buttons (wired to core engine; no business logic here)
         run_box = ttk.Frame(right)
         run_box.grid(row=3, column=0, sticky="e", pady=(10, 0))
@@ -287,13 +303,33 @@ class TurboExtractorApp(tk.Tk):
             return
         self.tree.selection_set(item)
         path = self._get_tree_path(item)
-        if len(path) != 1:
+
+        # Source
+        if len(path) == 1:
+            self._ctx_source_index = path[0]
+            try:
+                self._source_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self._source_menu.grab_release()
             return
-        self._ctx_source_index = path[0]
-        try:
-            self._source_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self._source_menu.grab_release()
+
+        # Recipe
+        if len(path) == 2:
+            self._ctx_recipe_path = path
+            try:
+                self._recipe_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self._recipe_menu.grab_release()
+            return
+
+        # Sheet
+        if len(path) == 3:
+            self._ctx_sheet_path = path
+            try:
+                self._sheet_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self._sheet_menu.grab_release()
+            return
 
     # ---------------- Templates / Default (Source context menu) ----------------
 
@@ -341,6 +377,118 @@ class TurboExtractorApp(tk.Tk):
     def _ctx_reset_default(self) -> None:
         tpl.reset_default_template()
 
+
+    # ---------------- Inline Rename (Recipe/Sheet) ----------------
+
+    def _ctx_rename_recipe(self) -> None:
+        if not self._ctx_recipe_path:
+            return
+        self._begin_inline_rename(kind="recipe", path=self._ctx_recipe_path)
+
+    def _ctx_rename_sheet(self) -> None:
+        if not self._ctx_sheet_path:
+            return
+        self._begin_inline_rename(kind="sheet", path=self._ctx_sheet_path)
+
+    def _begin_inline_rename(self, kind: str, path: list[int]) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+        item_id = sel[0]
+
+        self._cancel_inline_rename()
+
+        bbox = self.tree.bbox(item_id)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+
+        current_text = self.tree.item(item_id, "text")
+
+        var = tk.StringVar(value=current_text)
+        entry = ttk.Entry(self.tree, textvariable=var)
+        entry.place(x=x, y=y, width=max(w, 80), height=h)
+
+        self._rename_entry = entry
+        self._rename_item_id = item_id
+        self._rename_path = list(path)
+        self._rename_kind = kind
+
+        entry.focus_set()
+        entry.icursor("end")
+
+        entry.bind("<Return>", lambda e: self._commit_inline_rename())
+        entry.bind("<Escape>", lambda e: self._cancel_inline_rename())
+        entry.bind("<FocusOut>", lambda e: self._commit_inline_rename())
+
+    def _cancel_inline_rename(self) -> None:
+        if self._rename_entry is not None:
+            try:
+                self._rename_entry.destroy()
+            except Exception:
+                pass
+        self._rename_entry = None
+        self._rename_item_id = None
+        self._rename_path = None
+        self._rename_kind = None
+
+    def _commit_inline_rename(self) -> None:
+        if self._rename_entry is None or self._rename_path is None or self._rename_kind is None:
+            return
+        new_name = self._rename_entry.get().strip()
+        kind = self._rename_kind
+        path = self._rename_path
+
+        self._cancel_inline_rename()
+
+        if not new_name:
+            return
+
+        if kind == "recipe" and len(path) == 2:
+            self._apply_recipe_rename(path, new_name)
+            self.refresh_tree()
+            self._select_tree_by_indices(path)
+            self._mark_dirty()
+            return
+
+        if kind == "sheet" and len(path) == 3:
+            self._apply_sheet_rename(path, new_name)
+            self.refresh_tree()
+            self._select_tree_by_indices(path)
+            self._mark_dirty()
+            return
+
+    def _select_tree_by_indices(self, path: list[int]) -> None:
+        if not path:
+            return
+        roots = list(self.tree.get_children(""))
+        if path[0] < 0 or path[0] >= len(roots):
+            return
+        item = roots[path[0]]
+        if len(path) >= 2:
+            kids = list(self.tree.get_children(item))
+            if path[1] < 0 or path[1] >= len(kids):
+                return
+            item = kids[path[1]]
+        if len(path) >= 3:
+            kids = list(self.tree.get_children(item))
+            if path[2] < 0 or path[2] >= len(kids):
+                return
+            item = kids[path[2]]
+
+        self.tree.selection_set(item)
+        self.tree.see(item)
+        self._on_tree_select()
+
+    def _apply_recipe_rename(self, path: list[int], new_name: str) -> None:
+        s, r = path[0], path[1]
+        self.project.sources[s].recipes[r].name = new_name
+
+    def _apply_sheet_rename(self, path: list[int], new_name: str) -> None:
+        s, r, sh = path[0], path[1], path[2]
+        sheet = self.project.sources[s].recipes[r].sheets[sh]
+        sheet.name = new_name
+        sheet.workbook_sheet = new_name
     # ---------------- Structure actions ----------------
 
     def add_sources(self) -> None:

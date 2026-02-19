@@ -1,6 +1,7 @@
 \
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import Optional
@@ -9,6 +10,7 @@ from core.project import ProjectConfig, SourceConfig, RecipeConfig
 from core.models import SheetConfig, Destination, Rule
 from core.engine import run_all as engine_run_all, run_sheet as engine_run_sheet
 from core.errors import AppError
+from core.autosave import resolve_autosave_path, save_project_atomic, load_project_if_exists
 
 
 class TurboExtractorApp(tk.Tk):
@@ -33,7 +35,22 @@ class TurboExtractorApp(tk.Tk):
         self.current_source_path: Optional[str] = None
         self.current_recipe_name: Optional[str] = None
 
+        # Autosave state
+        self._autosave_dirty: bool = False
+        self._autosave_after_id: Optional[str] = None
+        self._autosave_periodic_id: Optional[str] = None
+        self._autosave_path: str = resolve_autosave_path()
+
         self._build_ui()
+
+        # Load autosave (if present) AFTER UI exists, then refresh.
+        self._try_load_autosave()
+
+        # Periodic safety save
+        self._schedule_periodic_autosave()
+
+        # Ensure save on close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------- UI ----------------
 
@@ -161,6 +178,56 @@ class TurboExtractorApp(tk.Tk):
 
         self._clear_editor()
 
+    # ---------------- Autosave ----------------
+
+    def _mark_dirty(self) -> None:
+        self._autosave_dirty = True
+        self._schedule_debounced_autosave()
+
+    def _schedule_debounced_autosave(self) -> None:
+        if self._autosave_after_id is not None:
+            try:
+                self.after_cancel(self._autosave_after_id)
+            except Exception:
+                pass
+        # Debounce ~1.2s
+        self._autosave_after_id = self.after(1200, self._autosave_now)
+
+    def _schedule_periodic_autosave(self) -> None:
+        # ~45s safety save
+        self._autosave_periodic_id = self.after(45000, self._periodic_autosave_tick)
+
+    def _periodic_autosave_tick(self) -> None:
+        if self._autosave_dirty:
+            self._autosave_now()
+        self._schedule_periodic_autosave()
+
+    def _autosave_now(self) -> None:
+        if not self._autosave_dirty:
+            return
+        try:
+            save_project_atomic(self.project, self._autosave_path)
+            self._autosave_dirty = False
+        except Exception:
+            # Autosave should never crash the app.
+            pass
+
+    def _try_load_autosave(self) -> None:
+        try:
+            loaded = load_project_if_exists(self._autosave_path)
+            if loaded is not None:
+                self.project = loaded
+                self.refresh_tree()
+                self._clear_editor()
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        try:
+            self._autosave_now()
+        finally:
+            self.destroy()
+
     # ---------------- Tree helpers ----------------
 
     def refresh_tree(self) -> None:
@@ -219,6 +286,7 @@ class TurboExtractorApp(tk.Tk):
             self.project.sources.append(SourceConfig(path=p, recipes=[recipe]))
 
         self.refresh_tree()
+        self._mark_dirty()
 
     def move_source_up(self) -> None:
         sel = self.tree.selection()
@@ -238,6 +306,7 @@ class TurboExtractorApp(tk.Tk):
         moved_path = self.project.sources[idx - 1].path
         self.refresh_tree()
         self._select_source_by_path(moved_path)
+        self._mark_dirty()
 
     def move_source_down(self) -> None:
         sel = self.tree.selection()
@@ -257,6 +326,7 @@ class TurboExtractorApp(tk.Tk):
         moved_path = self.project.sources[idx + 1].path
         self.refresh_tree()
         self._select_source_by_path(moved_path)
+        self._mark_dirty()
 
     def _select_source_by_path(self, source_path: str) -> None:
         for item_id in self.tree.get_children(""):
@@ -280,6 +350,7 @@ class TurboExtractorApp(tk.Tk):
         source = self.project.sources[path[0]]
         source.recipes.append(RecipeConfig(name=f"Recipe{len(source.recipes) + 1}", sheets=[]))
         self.refresh_tree()
+        self._mark_dirty()
 
     def add_sheet(self) -> None:
         sel = self.tree.selection()
@@ -295,6 +366,7 @@ class TurboExtractorApp(tk.Tk):
         recipe = self.project.sources[path[0]].recipes[path[1]]
         recipe.sheets.append(self._make_default_sheet(name=f"Sheet{len(recipe.sheets) + 1}"))
         self.refresh_tree()
+        self._mark_dirty()
 
     def remove_selected(self) -> None:
         sel = self.tree.selection()
@@ -320,6 +392,7 @@ class TurboExtractorApp(tk.Tk):
         self.current_recipe_name = None
         self.refresh_tree()
         self._clear_editor()
+        self._mark_dirty()
 
     # ---------------- Run wiring ----------------
 
@@ -410,6 +483,8 @@ class TurboExtractorApp(tk.Tk):
         self.current_sheet.destination.start_col = self.start_col_var.get()
         self.current_sheet.destination.start_row = self.start_row_var.get()
 
+        self._mark_dirty()
+
     # ---------------- Rules UI ----------------
 
     def add_rule(self) -> None:
@@ -417,12 +492,14 @@ class TurboExtractorApp(tk.Tk):
             return
         self.current_sheet.rules.append(Rule(mode="include", column="A", operator="equals", value=""))
         self._rebuild_rules()
+        self._mark_dirty()
 
     def _remove_rule(self, idx: int) -> None:
         if not self.current_sheet:
             return
         del self.current_sheet.rules[idx]
         self._rebuild_rules()
+        self._mark_dirty()
 
     def _rebuild_rules(self) -> None:
         for child in self.rules_frame.winfo_children():
@@ -456,6 +533,7 @@ class TurboExtractorApp(tk.Tk):
             rule.column = col_var.get()
             rule.operator = op_var.get()
             rule.value = val_var.get()
+            self._mark_dirty()
 
         mode_var.trace_add("write", push)
         col_var.trace_add("write", push)

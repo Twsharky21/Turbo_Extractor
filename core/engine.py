@@ -1,7 +1,7 @@
 \
 from __future__ import annotations
 
-from typing import List, Any, Iterable, Tuple
+from typing import List, Any, Iterable, Tuple, Callable, Optional
 import os
 
 from openpyxl import Workbook, load_workbook
@@ -124,47 +124,82 @@ RunItem = Tuple[str, str, SheetConfig]
 """
 
 
-def run_all(items: Iterable[RunItem]) -> RunReport:
+def run_all(
+    items: Iterable[RunItem],
+    on_progress: Optional[Callable[[str, Any], None]] = None,
+) -> RunReport:
     results: List[SheetResult] = []
     ok = True
 
     for (source_path, recipe_name, sheet_cfg) in items:
+        if on_progress is not None:
+            try:
+                on_progress(
+                    "start",
+                    {
+                        "source_path": source_path,
+                        "recipe_name": recipe_name,
+                        "sheet_name": sheet_cfg.name,
+                    },
+                )
+            except Exception:
+                # Progress reporting must never break execution.
+                pass
         try:
             res = run_sheet(source_path, sheet_cfg, recipe_name=recipe_name)
             results.append(res)
+            if on_progress is not None:
+                try:
+                    on_progress("result", res)
+                except Exception:
+                    pass
         except AppError as e:
             ok = False
-            results.append(
-                SheetResult(
-                    source_path=source_path,
-                    recipe_name=recipe_name,
-                    sheet_name=sheet_cfg.name,
-                    dest_file=sheet_cfg.destination.file_path,
-                    dest_sheet=sheet_cfg.destination.sheet_name,
-                    rows_written=0,
-                    message="ERROR",
-                    error_code=e.code,
-                    error_message=e.message,
-                    error_details=e.details,
-                )
+            err_res = SheetResult(
+                source_path=source_path,
+                recipe_name=recipe_name,
+                sheet_name=sheet_cfg.name,
+                dest_file=sheet_cfg.destination.file_path,
+                dest_sheet=sheet_cfg.destination.sheet_name,
+                rows_written=0,
+                message="ERROR",
+                error_code=e.code,
+                error_message=e.message,
+                error_details=e.details,
             )
+            results.append(err_res)
+            if on_progress is not None:
+                try:
+                    on_progress("error", err_res)
+                except Exception:
+                    pass
             break
         except Exception as e:
             ok = False
-            results.append(
-                SheetResult(
-                    source_path=source_path,
-                    recipe_name=recipe_name,
-                    sheet_name=sheet_cfg.name,
-                    dest_file=sheet_cfg.destination.file_path,
-                    dest_sheet=sheet_cfg.destination.sheet_name,
-                    rows_written=0,
-                    message="ERROR",
-                    error_code="UNEXPECTED",
-                    error_message=str(e),
-                    error_details=None,
-                )
+            err_res = SheetResult(
+                source_path=source_path,
+                recipe_name=recipe_name,
+                sheet_name=sheet_cfg.name,
+                dest_file=sheet_cfg.destination.file_path,
+                dest_sheet=sheet_cfg.destination.sheet_name,
+                rows_written=0,
+                message="ERROR",
+                error_code="UNEXPECTED",
+                error_message=str(e),
+                error_details=None,
             )
+            results.append(err_res)
+            if on_progress is not None:
+                try:
+                    on_progress("error", err_res)
+                except Exception:
+                    pass
             break
 
-    return RunReport(ok=ok, results=results)
+    report = RunReport(ok=ok, results=results)
+    if on_progress is not None:
+        try:
+            on_progress("done", report)
+        except Exception:
+            pass
+    return report

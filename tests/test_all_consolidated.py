@@ -893,6 +893,102 @@ def test_run_all_fail_fast_records_error_and_stops():
         assert "S2-alpha" not in values
 
 
+def test_run_all_progress_callback_events_success_order():
+    from core.engine import run_all
+    from core.models import SheetConfig, Destination
+
+    events = []
+
+    def cb(ev, payload):
+        events.append((ev, payload))
+
+    with TemporaryDirectory() as td:
+        src1 = os.path.join(td, "s1.xlsx")
+        src2 = os.path.join(td, "s2.xlsx")
+        dest = os.path.join(td, "out.xlsx")
+
+        runall_make_source_xlsx(src1, "Sheet1", "S1")
+        runall_make_source_xlsx(src2, "Sheet1", "S2")
+
+        cfg = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row=""),
+        )
+
+        report = run_all([(src1, "R1", cfg), (src2, "R2", cfg)], on_progress=cb)
+
+        assert report.ok is True
+
+        kinds = [e[0] for e in events]
+        assert kinds[0:4] == ["start", "result", "start", "result"]
+        assert kinds[-1] == "done"
+
+        # result payloads are SheetResult
+        assert getattr(events[1][1], "rows_written", None) == 1
+        assert getattr(events[3][1], "rows_written", None) == 1
+
+
+def test_run_all_progress_callback_events_fail_fast_order():
+    from core.engine import run_all
+    from core.models import SheetConfig, Destination
+
+    events = []
+
+    def cb(ev, payload):
+        events.append((ev, payload))
+
+    with TemporaryDirectory() as td:
+        src1 = os.path.join(td, "s1.xlsx")
+        src2 = os.path.join(td, "s2.xlsx")
+        dest = os.path.join(td, "out.xlsx")
+
+        runall_make_source_xlsx(src1, "Sheet1", "S1")
+        runall_make_source_xlsx(src2, "Sheet1", "S2")
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Out"
+        ws["B1"] = "BLOCK"
+        wb.save(dest)
+
+        cfg_blocked = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row="1"),
+        )
+        cfg_should_not_run = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row=""),
+        )
+
+        report = run_all([(src1, "R1", cfg_blocked), (src2, "R2", cfg_should_not_run)], on_progress=cb)
+        assert report.ok is False
+
+        kinds = [e[0] for e in events]
+        # Must stop after first error (no second start)
+        assert kinds[0] == "start"
+        assert "start" not in kinds[2:-1]
+        assert kinds[1] == "error"
+        assert kinds[-1] == "done"
+
+
 # ---- END {f} ----
 
 
@@ -1553,7 +1649,7 @@ def test_run_all_calls_engine_with_project_items(monkeypatch):
         return RunReport(ok=True, results=[])
 
     monkeypatch.setattr(app, "engine_run_all", fake_run_all)
-    monkeypatch.setattr(app.messagebox, "showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(gui, "_show_scrollable_report_dialog", lambda *a, **k: None)
 
     gui.run_all()
 

@@ -203,8 +203,36 @@ class TurboExtractorApp(tk.Tk):
         self._ctx_sheet_path: Optional[list[int]] = None
 
         # Run buttons (wired to core engine; no business logic here)
+        feedback_box = ttk.LabelFrame(right, text="Run Feedback", padding=8)
+        feedback_box.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        feedback_box.columnconfigure(0, weight=1)
+        feedback_box.rowconfigure(0, weight=1)
+
+        self.feedback_tree = ttk.Treeview(
+            feedback_box,
+            columns=("status", "rows", "message"),
+            show="headings",
+            height=7,
+        )
+        self.feedback_tree.grid(row=0, column=0, sticky="nsew")
+        self.feedback_tree.heading("status", text="Status")
+        self.feedback_tree.heading("rows", text="Rows")
+        self.feedback_tree.heading("message", text="Message")
+        self.feedback_tree.column("status", width=110, anchor="w")
+        self.feedback_tree.column("rows", width=70, anchor="center")
+        self.feedback_tree.column("message", width=600, anchor="w")
+
+        fb_scroll = ttk.Scrollbar(feedback_box, orient="vertical", command=self.feedback_tree.yview)
+        fb_scroll.grid(row=0, column=1, sticky="ns")
+        self.feedback_tree.configure(yscrollcommand=fb_scroll.set)
+
+        self.feedback_status_var = tk.StringVar(value="Idle")
+        ttk.Label(feedback_box, textvariable=self.feedback_status_var).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        right.rowconfigure(3, weight=1)
+
         run_box = ttk.Frame(right)
-        run_box.grid(row=3, column=0, sticky="e", pady=(10, 0))
+        run_box.grid(row=4, column=0, sticky="e", pady=(10, 0))
         ttk.Button(run_box, text="RUN", command=self.run_selected_sheet).pack(side="right")
         ttk.Button(run_box, text="RUN ALL", command=self.run_all).pack(side="right", padx=(0, 8))
 
@@ -627,6 +655,48 @@ class TurboExtractorApp(tk.Tk):
 
     # ---------------- Run wiring ----------------
 
+    def _feedback_clear(self) -> None:
+        for item in self.feedback_tree.get_children():
+            self.feedback_tree.delete(item)
+        self.feedback_status_var.set("Running...")
+
+    def _feedback_key(self, source_path: str, recipe_name: str, sheet_name: str) -> str:
+        base = os.path.basename(source_path)
+        return f"{base} | {recipe_name} / {sheet_name}"
+
+    def _feedback_set_row(self, key: str, status: str, rows: str, message: str) -> None:
+        # Find existing row by key in Message column (stable id would require tagging; keep simple).
+        for iid in self.feedback_tree.get_children():
+            vals = self.feedback_tree.item(iid, "values")
+            if vals and len(vals) == 3 and vals[2].startswith(key + " —"):
+                self.feedback_tree.item(iid, values=(status, rows, message))
+                return
+        self.feedback_tree.insert("", "end", values=(status, rows, message))
+
+    def _feedback_progress_callback(self, event: str, payload) -> None:
+        try:
+            if event == "start":
+                key = self._feedback_key(payload["source_path"], payload["recipe_name"], payload["sheet_name"])
+                self._feedback_set_row(key, "RUNNING", "", f"{key} — running")
+            elif event in ("result", "error"):
+                res = payload
+                key = self._feedback_key(res.source_path, res.recipe_name, res.sheet_name)
+                if getattr(res, "error_code", None):
+                    msg = f"{key} — {res.error_code}: {res.error_message}"
+                    self._feedback_set_row(key, "ERROR", "0", msg)
+                else:
+                    msg = f"{key} — {res.rows_written} rows"
+                    self._feedback_set_row(key, "OK", str(res.rows_written), msg)
+            elif event == "done":
+                report = payload
+                self.feedback_status_var.set("Done" if report.ok else "Done (with errors)")
+        finally:
+            # Keep UI responsive during long runs.
+            try:
+                self.update_idletasks()
+            except Exception:
+                pass
+
     def _format_run_report(self, report) -> str:
         lines = []
         for r in report.results:
@@ -639,19 +709,112 @@ class TurboExtractorApp(tk.Tk):
 
     def run_all(self) -> None:
         items = self.project.build_run_items()
-        report = engine_run_all(items)
+        self._feedback_clear()
+        # Backwards-compatible call:
+        # - Newer core.engine.run_all may accept an on_progress callback.
+        # - Tests (and older implementations) may monkeypatch run_all with a
+        #   signature that does NOT accept extra kwargs.
+        try:
+            report = engine_run_all(items, on_progress=self._feedback_progress_callback)
+        except TypeError:
+            report = engine_run_all(items)
+            # Populate feedback panel from the final report (best-effort).
+            try:
+                for r in getattr(report, "results", []) or []:
+                    self._feedback_progress_callback("result", r)
+            except Exception:
+                pass
         title = "Run complete" if report.ok else "Run complete (with errors)"
-        messagebox.showinfo(title, self._format_run_report(report))
+        self._show_scrollable_report_dialog(title, self._format_run_report(report))
 
     def run_selected_sheet(self) -> None:
         if not self.current_sheet or not self.current_source_path or not self.current_recipe_name:
             messagebox.showwarning("Select Sheet", "Select a Sheet to run.")
             return
+        self._feedback_clear()
         try:
             res = engine_run_sheet(self.current_source_path, self.current_sheet, recipe_name=self.current_recipe_name)
+            self._feedback_progress_callback(
+                "result",
+                res,
+            )
             messagebox.showinfo("Run complete", f"{res.recipe_name} / {res.sheet_name}: {res.rows_written} rows")
         except AppError as e:
+            from core.models import SheetResult
+
+            err_res = SheetResult(
+                source_path=self.current_source_path,
+                recipe_name=self.current_recipe_name,
+                sheet_name=self.current_sheet.name,
+                dest_file=self.current_sheet.destination.file_path,
+                dest_sheet=self.current_sheet.destination.sheet_name,
+                rows_written=0,
+                message="ERROR",
+                error_code=e.code,
+                error_message=e.message,
+                error_details=e.details,
+            )
+            self._feedback_progress_callback("error", err_res)
             messagebox.showerror("Run failed", f"{e.code}: {e.message}")
+
+    # -----------------------------
+    # Scrollable report dialog
+    # -----------------------------
+
+    def _show_scrollable_report_dialog(self, title: str, text: str) -> None:
+        """Show a single centered, scrollable summary dialog.
+
+        The RUN ALL summary can be long; messagebox cannot scroll.
+        """
+        # Ensure only one report window exists at a time.
+        if getattr(self, "_report_dialog", None) is not None:
+            try:
+                self._report_dialog.destroy()
+            except Exception:
+                pass
+            self._report_dialog = None
+
+        win = tk.Toplevel(self)
+        self._report_dialog = win
+        win.title(title)
+        win.transient(self)
+        win.grab_set()
+
+        container = ttk.Frame(win, padding=10)
+        container.grid(row=0, column=0, sticky="nsew")
+        win.rowconfigure(0, weight=1)
+        win.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        txt = tk.Text(container, wrap="word", height=22, width=90)
+        vsb = ttk.Scrollbar(container, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=vsb.set)
+        txt.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        btn_row = ttk.Frame(container)
+        btn_row.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        close_btn = ttk.Button(btn_row, text="Close", command=win.destroy)
+        close_btn.grid(row=0, column=0, sticky="e")
+
+        txt.insert("1.0", text or "")
+        txt.configure(state="disabled")
+
+        # Center on screen
+        win.update_idletasks()
+        w = win.winfo_width()
+        h = win.winfo_height()
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        x = max(0, int((sw - w) / 2))
+        y = max(0, int((sh - h) / 2))
+        win.geometry(f"{w}x{h}+{x}+{y}")
+
+        try:
+            close_btn.focus_set()
+        except Exception:
+            pass
 
     def _make_default_sheet(self, name: str) -> SheetConfig:
         return SheetConfig(

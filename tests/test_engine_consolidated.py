@@ -1,3 +1,87 @@
+# Consolidated from: test_engine_smoke.py, test_engine_more.py
+# Generated: 2026-02-19 20:40 UTC
+# NOTE: Function renames applied only to avoid name collisions across original test modules.
+
+
+
+# ---- BEGIN test_engine_smoke.py ----
+
+\
+import os
+from tempfile import TemporaryDirectory
+from openpyxl import Workbook, load_workbook
+
+from core.engine import run_sheet
+from core.models import SheetConfig, Destination, Rule
+
+
+def smoke_make_source_xlsx(path: str):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    # 4 cols x 4 rows
+    data = [
+        ["alpha", "x", 1, "foo"],
+        ["beta",  "y", 2, "bar"],
+        ["gamma", "z", 3, "baz"],
+        ["beta",  "y", 4, "qux"],
+    ]
+    for r, row in enumerate(data, start=1):
+        for c, val in enumerate(row, start=1):
+            ws.cell(row=r, column=c, value=val)
+    wb.save(path)
+
+
+def test_engine_smoke_pack_columns_and_rules_and_append():
+    with TemporaryDirectory() as td:
+        src = os.path.join(td, "src.xlsx")
+        dest = os.path.join(td, "dest.xlsx")
+
+        smoke_make_source_xlsx(src)
+
+        # Pre-populate destination in landing columns B:C to force append to row 2
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Out"
+        ws["B1"] = "existing"
+        ws["C1"] = "existing2"
+        wb.save(dest)
+
+        cfg = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",   # take alpha/beta/gamma + numeric col
+            rows_spec="",         # ALL used
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[Rule(mode="include", column="A", operator="equals", value="beta")],
+            destination=Destination(
+                file_path=dest,
+                sheet_name="Out",
+                start_col="B",
+                start_row="",       # append mode (landing-zone aware)
+            ),
+        )
+
+        result = run_sheet(src, cfg, recipe_name="R1")
+        assert result.rows_written == 2
+
+        out = load_workbook(dest)
+        ws = out["Out"]
+
+        # Append should be at row 2 (since max used row in B:C was 1)
+        assert ws["B2"].value == "beta"
+        assert ws["C2"].value == 2
+        assert ws["B3"].value == "beta"
+        assert ws["C3"].value == 4
+
+
+# ---- END {f} ----
+
+
+
+# ---- BEGIN test_engine_more.py ----
+
 \
 import os
 import csv
@@ -10,7 +94,7 @@ from core.models import SheetConfig, Destination, Rule
 from core.errors import AppError, DEST_BLOCKED
 
 
-def make_source_xlsx(path: str):
+def more_make_source_xlsx(path: str):
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
@@ -26,7 +110,7 @@ def make_source_xlsx(path: str):
     wb.save(path)
 
 
-def make_source_csv(path: str):
+def more_make_source_csv(path: str):
     data = [
         ["alpha", "x", 1, "foo"],
         ["beta",  "y", 2, "bar"],
@@ -50,7 +134,7 @@ def test_engine_csv_smoke_pack_rules_append():
         src = os.path.join(td, "src.csv")
         dest = os.path.join(td, "dest.xlsx")
 
-        make_source_csv(src)
+        more_make_source_csv(src)
 
         wb = Workbook()
         ws = wb.active
@@ -85,7 +169,7 @@ def test_engine_keep_mode_preserves_gaps_no_rules():
     with TemporaryDirectory() as td:
         src = os.path.join(td, "src.xlsx")
         dest = os.path.join(td, "dest.xlsx")
-        make_source_xlsx(src)
+        more_make_source_xlsx(src)
 
         cfg = SheetConfig(
             name="Sheet1",
@@ -125,7 +209,7 @@ def test_engine_explicit_start_row_and_col_lands_exactly():
     with TemporaryDirectory() as td:
         src = os.path.join(td, "src.xlsx")
         dest = os.path.join(td, "dest.xlsx")
-        make_source_xlsx(src)
+        more_make_source_xlsx(src)
 
         cfg = SheetConfig(
             name="Sheet1",
@@ -153,7 +237,7 @@ def test_engine_dest_blocked_explicit_raises():
     with TemporaryDirectory() as td:
         src = os.path.join(td, "src.xlsx")
         dest = os.path.join(td, "dest.xlsx")
-        make_source_xlsx(src)
+        more_make_source_xlsx(src)
 
         # Create destination with a blocker at the exact landing cell
         wb = Workbook()
@@ -182,7 +266,7 @@ def test_engine_append_two_runs_stack_by_landing_zone_cols():
     with TemporaryDirectory() as td:
         src = os.path.join(td, "src.xlsx")
         dest = os.path.join(td, "dest.xlsx")
-        make_source_xlsx(src)
+        more_make_source_xlsx(src)
 
         cfg = SheetConfig(
             name="Sheet1",
@@ -212,7 +296,7 @@ def test_engine_rules_filter_to_zero_rows_writes_nothing():
     with TemporaryDirectory() as td:
         src = os.path.join(td, "src.xlsx")
         dest = os.path.join(td, "dest.xlsx")
-        make_source_xlsx(src)
+        more_make_source_xlsx(src)
 
         cfg = SheetConfig(
             name="Sheet1",
@@ -233,3 +317,6 @@ def test_engine_rules_filter_to_zero_rows_writes_nothing():
         ws = wb["Out"]
         # should remain empty
         assert ws["B1"].value in (None, "")
+
+
+# ---- END {f} ----

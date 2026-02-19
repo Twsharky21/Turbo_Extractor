@@ -1,3 +1,137 @@
+# Consolidated from: test_run_all.py, test_run_all_more.py, test_project_config.py
+# Generated: 2026-02-19 20:40 UTC
+# NOTE: Function renames applied only to avoid name collisions across original test modules.
+
+
+
+# ---- BEGIN test_run_all.py ----
+
+\
+import os
+from tempfile import TemporaryDirectory
+from openpyxl import Workbook, load_workbook
+
+from core.engine import run_all
+from core.models import SheetConfig, Destination
+from core.errors import DEST_BLOCKED
+
+
+def runall_make_source_xlsx(path: str, sheet_name: str, tag: str):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name
+    ws["A1"] = f"{tag}-alpha"
+    ws["B1"] = "x"
+    ws["C1"] = 1
+    wb.save(path)
+
+
+def test_run_all_two_items_success_same_dest_stacks():
+    with TemporaryDirectory() as td:
+        src1 = os.path.join(td, "s1.xlsx")
+        src2 = os.path.join(td, "s2.xlsx")
+        dest = os.path.join(td, "out.xlsx")
+
+        runall_make_source_xlsx(src1, "Sheet1", "S1")
+        runall_make_source_xlsx(src2, "Sheet1", "S2")
+
+        cfg1 = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row=""),
+        )
+        cfg2 = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row=""),
+        )
+
+        report = run_all([
+            (src1, "R1", cfg1),
+            (src2, "R2", cfg2),
+        ])
+
+        assert report.ok is True
+        assert len(report.results) == 2
+        assert report.results[0].rows_written == 1
+        assert report.results[1].rows_written == 1
+
+        wb = load_workbook(dest)
+        ws = wb["Out"]
+        assert ws["B1"].value == "S1-alpha"
+        assert ws["C1"].value == 1
+        assert ws["B2"].value == "S2-alpha"
+        assert ws["C2"].value == 1
+
+
+def test_run_all_fail_fast_records_error_and_stops():
+    with TemporaryDirectory() as td:
+        src1 = os.path.join(td, "s1.xlsx")
+        src2 = os.path.join(td, "s2.xlsx")
+        dest = os.path.join(td, "out.xlsx")
+
+        runall_make_source_xlsx(src1, "Sheet1", "S1")
+        runall_make_source_xlsx(src2, "Sheet1", "S2")
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Out"
+        ws["B1"] = "BLOCK"
+        wb.save(dest)
+
+        cfg_blocked = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row="1"),
+        )
+
+        cfg_should_not_run = SheetConfig(
+            name="Sheet1",
+            workbook_sheet="Sheet1",
+            columns_spec="A,C",
+            rows_spec="1-1",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(file_path=dest, sheet_name="Out", start_col="B", start_row=""),
+        )
+
+        report = run_all([
+            (src1, "R1", cfg_blocked),
+            (src2, "R2", cfg_should_not_run),
+        ])
+
+        assert report.ok is False
+        assert len(report.results) == 1
+        assert report.results[0].error_code == DEST_BLOCKED
+
+        wb2 = load_workbook(dest)
+        ws2 = wb2["Out"]
+        values = [ws2["B1"].value, ws2["B2"].value, ws2["B3"].value]
+        assert "S2-alpha" not in values
+
+
+# ---- END {f} ----
+
+
+
+# ---- BEGIN test_run_all_more.py ----
+
 \
 import os
 import csv
@@ -9,7 +143,7 @@ from core.models import SheetConfig, Destination, Rule
 from core.errors import DEST_BLOCKED
 
 
-def make_source_xlsx(path: str, sheet_name: str, rows):
+def runall_more_make_source_xlsx(path: str, sheet_name: str, rows):
     wb = Workbook()
     ws = wb.active
     ws.title = sheet_name
@@ -19,7 +153,7 @@ def make_source_xlsx(path: str, sheet_name: str, rows):
     wb.save(path)
 
 
-def make_source_csv(path: str, rows):
+def runall_more_make_source_csv(path: str, rows):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for row in rows:
@@ -33,9 +167,9 @@ def test_run_all_three_items_stacks_rows_in_order_same_dest():
         s2 = os.path.join(td, "s2.xlsx")
         s3 = os.path.join(td, "s3.xlsx")
 
-        make_source_xlsx(s1, "Sheet1", [["A1", "x", 1]])
-        make_source_xlsx(s2, "Sheet1", [["A2", "x", 2]])
-        make_source_xlsx(s3, "Sheet1", [["A3", "x", 3]])
+        runall_more_make_source_xlsx(s1, "Sheet1", [["A1", "x", 1]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["A2", "x", 2]])
+        runall_more_make_source_xlsx(s3, "Sheet1", [["A3", "x", 3]])
 
         cfg = lambda: SheetConfig(
             name="Sheet1",
@@ -74,9 +208,9 @@ def test_run_all_mixed_widths_append_uses_full_landing_zone_awareness():
         s2 = os.path.join(td, "s2.xlsx")
 
         # s1 writes width=3 (A,B,C) -> landing zone B:D
-        make_source_xlsx(s1, "Sheet1", [["v1", "v2", "v3"]])
+        runall_more_make_source_xlsx(s1, "Sheet1", [["v1", "v2", "v3"]])
         # s2 writes width=2 (A,C) -> landing zone B:C
-        make_source_xlsx(s2, "Sheet1", [["w1", "x", "w3"]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["w1", "x", "w3"]])
 
         cfg1 = SheetConfig(
             name="Sheet1",
@@ -123,8 +257,8 @@ def test_run_all_two_different_destinations_both_created():
         s1 = os.path.join(td, "s1.xlsx")
         s2 = os.path.join(td, "s2.xlsx")
 
-        make_source_xlsx(s1, "Sheet1", [["A1", "x", 1]])
-        make_source_xlsx(s2, "Sheet1", [["A2", "x", 2]])
+        runall_more_make_source_xlsx(s1, "Sheet1", [["A1", "x", 1]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["A2", "x", 2]])
 
         cfg1 = SheetConfig(
             name="Sheet1",
@@ -166,12 +300,12 @@ def test_run_all_keep_mode_then_pack_mode_stacks():
         s2 = os.path.join(td, "s2.xlsx")
 
         # 3 rows so keep-mode bounding box height=3 when rows_spec=1,3
-        make_source_xlsx(s1, "Sheet1", [
+        runall_more_make_source_xlsx(s1, "Sheet1", [
             ["alpha", "x", 1],
             ["beta",  "y", 2],
             ["gamma", "z", 3],
         ])
-        make_source_xlsx(s2, "Sheet1", [["delta", "q", 9]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["delta", "q", 9]])
 
         cfg_keep = SheetConfig(
             name="Sheet1",
@@ -222,9 +356,9 @@ def test_run_all_fail_fast_on_second_item_dest_blocked():
         s2 = os.path.join(td, "s2.xlsx")
         s3 = os.path.join(td, "s3.xlsx")
 
-        make_source_xlsx(s1, "Sheet1", [["A1", "x", 1]])
-        make_source_xlsx(s2, "Sheet1", [["A2", "x", 2]])
-        make_source_xlsx(s3, "Sheet1", [["A3", "x", 3]])
+        runall_more_make_source_xlsx(s1, "Sheet1", [["A1", "x", 1]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["A2", "x", 2]])
+        runall_more_make_source_xlsx(s3, "Sheet1", [["A3", "x", 3]])
 
         cfg_ok = SheetConfig(
             name="Sheet1",
@@ -278,8 +412,8 @@ def test_run_all_csv_then_xlsx_same_dest_stacks():
         s1 = os.path.join(td, "s1.csv")
         s2 = os.path.join(td, "s2.xlsx")
 
-        make_source_csv(s1, [["csv1", "x", 1]])
-        make_source_xlsx(s2, "Sheet1", [["xls1", "y", 2]])
+        runall_more_make_source_csv(s1, [["csv1", "x", 1]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["xls1", "y", 2]])
 
         cfg_csv = SheetConfig(
             name="Sheet1",
@@ -322,8 +456,8 @@ def test_run_all_rules_filter_zero_rows_then_next_item_runs_and_writes():
         s1 = os.path.join(td, "s1.xlsx")
         s2 = os.path.join(td, "s2.xlsx")
 
-        make_source_xlsx(s1, "Sheet1", [["alpha", "x", 1], ["beta", "y", 2]])
-        make_source_xlsx(s2, "Sheet1", [["gamma", "z", 3]])
+        runall_more_make_source_xlsx(s1, "Sheet1", [["alpha", "x", 1], ["beta", "y", 2]])
+        runall_more_make_source_xlsx(s2, "Sheet1", [["gamma", "z", 3]])
 
         cfg_zero = SheetConfig(
             name="Sheet1",
@@ -358,3 +492,65 @@ def test_run_all_rules_filter_zero_rows_then_next_item_runs_and_writes():
         ws = wb["Out"]
         assert ws["B1"].value == "gamma"
         assert ws["C1"].value == 3
+
+
+# ---- END {f} ----
+
+
+
+# ---- BEGIN test_project_config.py ----
+
+\
+import os
+from tempfile import TemporaryDirectory
+
+from core.project import ProjectConfig, SourceConfig, RecipeConfig
+from core.models import SheetConfig, Destination, Rule
+
+
+def make_sample_project(dest_path: str):
+    sheet = SheetConfig(
+        name="Sheet1",
+        workbook_sheet="Sheet1",
+        columns_spec="A,C",
+        rows_spec="1-1",
+        paste_mode="pack",
+        rules_combine="AND",
+        rules=[Rule(mode="include", column="A", operator="equals", value="alpha")],
+        destination=Destination(
+            file_path=dest_path,
+            sheet_name="Out",
+            start_col="B",
+            start_row="",
+        ),
+    )
+    recipe = RecipeConfig(name="R1", sheets=[sheet])
+    source = SourceConfig(path="dummy.xlsx", recipes=[recipe])
+    return ProjectConfig(sources=[source])
+
+
+def test_project_serialization_roundtrip():
+    with TemporaryDirectory() as td:
+        json_path = os.path.join(td, "proj.json")
+        proj = make_sample_project("out.xlsx")
+
+        proj.save_json(json_path)
+        loaded = ProjectConfig.load_json(json_path)
+
+        assert len(loaded.sources) == 1
+        assert loaded.sources[0].recipes[0].name == "R1"
+        assert loaded.sources[0].recipes[0].sheets[0].columns_spec == "A,C"
+
+
+def test_project_build_run_items_order():
+    proj = make_sample_project("out.xlsx")
+    items = proj.build_run_items()
+
+    assert len(items) == 1
+    src_path, recipe_name, sheet = items[0]
+    assert src_path == "dummy.xlsx"
+    assert recipe_name == "R1"
+    assert sheet.name == "Sheet1"
+
+
+# ---- END {f} ----

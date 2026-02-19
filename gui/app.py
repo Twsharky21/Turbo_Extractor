@@ -62,184 +62,207 @@ class TurboExtractorApp(tk.Tk):
     # ---------------- UI ----------------
 
     def _build_ui(self) -> None:
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+            # Overall layout: top toolbar, then left tree + right editor (monolith-like)
+            self.columnconfigure(0, weight=1)
+            self.rowconfigure(0, weight=1)
 
-        root = ttk.Frame(self, padding=10)
-        root.grid(row=0, column=0, sticky="nsew")
-        root.columnconfigure(0, weight=1)
-        root.columnconfigure(1, weight=3)
-        root.rowconfigure(0, weight=1)
+            root = ttk.Frame(self, padding=8)
+            root.grid(row=0, column=0, sticky="nsew")
+            root.columnconfigure(0, weight=1)
+            root.columnconfigure(1, weight=3)
+            root.rowconfigure(1, weight=1)
 
-        # ----- LEFT: Tree + buttons -----
-        left = ttk.LabelFrame(root, text="Sources / Recipes / Sheets", padding=8)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=1)
+            # ----- TOP TOOLBAR -----
+            topbar = ttk.Frame(root)
+            topbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+            for i in range(8):
+                topbar.columnconfigure(i, weight=0)
+            topbar.columnconfigure(7, weight=1)
 
-        self.tree = ttk.Treeview(left, show="tree", selectmode="browse")
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
-        self.tree.bind("<Button-3>", self._on_tree_right_click)
+            ttk.Button(topbar, text="Add Source (XLSX/CSV)", command=self.add_sources).grid(row=0, column=0, padx=(0, 6))
+            ttk.Button(topbar, text="Remove Selected", command=self.remove_selected).grid(row=0, column=1, padx=(0, 6))
+            ttk.Button(topbar, text="Move Source Up", command=self.move_source_up).grid(row=0, column=2, padx=(0, 6))
+            ttk.Button(topbar, text="Move Source Down", command=self.move_source_down).grid(row=0, column=3, padx=(0, 6))
+            ttk.Button(topbar, text="Add Recipe", command=self.add_recipe).grid(row=0, column=4, padx=(0, 6))
+            ttk.Button(topbar, text="Add Sheet", command=self.add_sheet).grid(row=0, column=5, padx=(0, 6))
 
-        yscroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
-        yscroll.grid(row=0, column=1, sticky="ns")
-        self.tree.configure(yscrollcommand=yscroll.set)
+            # ----- LEFT: TREE -----
+            left = ttk.Frame(root)
+            left.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+            left.columnconfigure(0, weight=1)
+            left.rowconfigure(0, weight=1)
 
-        btns = ttk.Frame(left)
-        btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+            self.tree = ttk.Treeview(left, show="tree", selectmode="browse")
+            self.tree.grid(row=0, column=0, sticky="nsew")
+            self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+            self.tree.bind("<Button-3>", self._on_tree_right_click)
 
-        ttk.Button(btns, text="Add Source(s)...", command=self.add_sources).pack(side="left")
-        ttk.Button(btns, text="Move Source Up", command=self.move_source_up).pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="Move Source Down", command=self.move_source_down).pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="Add Recipe", command=self.add_recipe).pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="Add Sheet", command=self.add_sheet).pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="Remove Selected", command=self.remove_selected).pack(side="left", padx=(6, 0))
+            yscroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
+            yscroll.grid(row=0, column=1, sticky="ns")
+            self.tree.configure(yscrollcommand=yscroll.set)
 
-        # ----- RIGHT: Editor -----
-        right = ttk.Frame(root)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)
+            # ----- RIGHT: EDITOR -----
+            right = ttk.Frame(root)
+            right.grid(row=1, column=1, sticky="nsew")
+            right.columnconfigure(0, weight=1)
+            right.rowconfigure(1, weight=1)
 
-        # Sheet box
-        sheet_box = ttk.LabelFrame(right, text="Selected Sheet", padding=8)
-        sheet_box.grid(row=0, column=0, sticky="ew")
-        sheet_box.columnconfigure(1, weight=1)
+            # Selected Sheet (within Recipe)
+            sheet_box = ttk.LabelFrame(right, text="Selected Sheet (within Recipe)", padding=10)
+            sheet_box.grid(row=0, column=0, sticky="ew")
+            sheet_box.columnconfigure(1, weight=1)
 
-        ttk.Label(sheet_box, text="Columns:").grid(row=0, column=0, sticky="w")
-        self.columns_var = tk.StringVar()
-        ttk.Entry(sheet_box, textvariable=self.columns_var).grid(row=0, column=1, sticky="ew")
-        self.columns_var.trace_add("write", self._push_editor_to_sheet)
+            ttk.Label(sheet_box, text="Columns (e.g., A,C,AC-ZZ):").grid(row=0, column=0, sticky="w")
+            self.columns_var = tk.StringVar()
+            ttk.Entry(sheet_box, textvariable=self.columns_var).grid(row=0, column=1, sticky="ew", padx=(10, 0))
+            self.columns_var.trace_add("write", self._push_editor_to_sheet)
 
-        ttk.Label(sheet_box, text="Rows:").grid(row=1, column=0, sticky="w")
-        self.rows_var = tk.StringVar()
-        ttk.Entry(sheet_box, textvariable=self.rows_var).grid(row=1, column=1, sticky="ew")
-        self.rows_var.trace_add("write", self._push_editor_to_sheet)
+            ttk.Label(sheet_box, text="Rows (e.g., 1-3,9-80,117):").grid(row=1, column=0, sticky="w", pady=(6, 0))
+            self.rows_var = tk.StringVar()
+            ttk.Entry(sheet_box, textvariable=self.rows_var).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(6, 0))
+            self.rows_var.trace_add("write", self._push_editor_to_sheet)
 
-        ttk.Label(sheet_box, text="Source Start Row:").grid(row=2, column=0, sticky="w")
-        self.source_start_row_var = tk.StringVar()
-        ttk.Entry(sheet_box, textvariable=self.source_start_row_var, width=10).grid(row=2, column=1, sticky="w")
-        self.source_start_row_var.trace_add("write", self._push_editor_to_sheet)
+            ttk.Label(sheet_box, text="Source Start Row:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+            self.source_start_row_var = tk.StringVar()
+            ttk.Entry(sheet_box, textvariable=self.source_start_row_var, width=10).grid(row=2, column=1, sticky="w", padx=(10, 0), pady=(6, 0))
+            self.source_start_row_var.trace_add("write", self._push_editor_to_sheet)
 
-        ttk.Label(sheet_box, text="Paste Mode:").grid(row=3, column=0, sticky="w")
-        self.paste_var = tk.StringVar()
-        self.paste_combo = ttk.Combobox(sheet_box, textvariable=self.paste_var, values=["pack", "keep"], state="readonly")
-        self.paste_combo.grid(row=3, column=1, sticky="ew")
-        self.paste_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
+            ttk.Label(sheet_box, text="Column paste mode:").grid(row=3, column=0, sticky="w", pady=(6, 0))
+            self.paste_var = tk.StringVar()
+            self.paste_combo = ttk.Combobox(
+                sheet_box,
+                textvariable=self.paste_var,
+                values=["Pack Together", "Keep Format"],
+                state="readonly",
+                width=18,
+            )
+            self.paste_combo.grid(row=3, column=1, sticky="w", padx=(10, 0), pady=(6, 0))
+            self.paste_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
 
-        ttk.Label(sheet_box, text="Rules Combine:").grid(row=4, column=0, sticky="w")
-        self.combine_var = tk.StringVar()
-        self.combine_combo = ttk.Combobox(sheet_box, textvariable=self.combine_var, values=["AND", "OR"], state="readonly")
-        self.combine_combo.grid(row=4, column=1, sticky="ew")
-        self.combine_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
+            # ----- RULES -----
+            rules_box = ttk.LabelFrame(right, text="Rules", padding=10)
+            rules_box.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+            rules_box.columnconfigure(0, weight=1)
+            rules_box.rowconfigure(2, weight=1)
+            right.rowconfigure(1, weight=1)
 
-        # Destination minimal (kept small for now)
-        dest_box = ttk.LabelFrame(right, text="Destination", padding=8)
-        dest_box.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        dest_box.columnconfigure(1, weight=1)
+            top_rules = ttk.Frame(rules_box)
+            top_rules.grid(row=0, column=0, sticky="ew")
+            top_rules.columnconfigure(1, weight=1)
 
-        ttk.Label(dest_box, text="File:").grid(row=0, column=0, sticky="w")
-        self.dest_file_var = tk.StringVar()
-        ttk.Entry(dest_box, textvariable=self.dest_file_var).grid(row=0, column=1, sticky="ew")
-        self.dest_file_var.trace_add("write", self._push_editor_to_sheet)
+            ttk.Label(top_rules, text="Rules combine:").grid(row=0, column=0, sticky="w")
+            self.combine_var = tk.StringVar()
+            self.combine_combo = ttk.Combobox(top_rules, textvariable=self.combine_var, values=["AND", "OR"], state="readonly", width=8)
+            self.combine_combo.grid(row=0, column=1, sticky="w", padx=(10, 0))
+            self.combine_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
 
-        ttk.Label(dest_box, text="Sheet Name:").grid(row=1, column=0, sticky="w")
-        self.dest_sheet_var = tk.StringVar()
-        ttk.Entry(dest_box, textvariable=self.dest_sheet_var).grid(row=1, column=1, sticky="ew")
-        self.dest_sheet_var.trace_add("write", self._push_editor_to_sheet)
+            ttk.Button(top_rules, text="+ Add rule", command=self.add_rule).grid(row=0, column=2, sticky="w", padx=(20, 0))
 
-        ttk.Label(dest_box, text="Start Col:").grid(row=2, column=0, sticky="w")
-        self.start_col_var = tk.StringVar()
-        ttk.Entry(dest_box, textvariable=self.start_col_var, width=8).grid(row=2, column=1, sticky="w")
-        self.start_col_var.trace_add("write", self._push_editor_to_sheet)
+            # Header row
+            hdr = ttk.Frame(rules_box)
+            hdr.grid(row=1, column=0, sticky="ew", pady=(8, 4))
+            ttk.Label(hdr, text="Include/Exclude").grid(row=0, column=0, sticky="w", padx=(0, 10))
+            ttk.Label(hdr, text="Column").grid(row=0, column=1, sticky="w", padx=(0, 10))
+            ttk.Label(hdr, text="Operator").grid(row=0, column=2, sticky="w", padx=(0, 10))
+            ttk.Label(hdr, text="Value").grid(row=0, column=3, sticky="w", padx=(0, 10))
 
-        ttk.Label(dest_box, text="Start Row:").grid(row=3, column=0, sticky="w")
-        self.start_row_var = tk.StringVar()
-        ttk.Entry(dest_box, textvariable=self.start_row_var, width=8).grid(row=3, column=1, sticky="w")
-        self.start_row_var.trace_add("write", self._push_editor_to_sheet)
+            # Scrollable rules area
+            rules_area = ttk.Frame(rules_box)
+            rules_area.grid(row=2, column=0, sticky="nsew")
+            rules_area.columnconfigure(0, weight=1)
+            rules_area.rowconfigure(0, weight=1)
 
-        # Rules section (scrollable)
-        rules_box = ttk.LabelFrame(right, text="Rules", padding=8)
-        rules_box.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
-        rules_box.columnconfigure(0, weight=1)
-        rules_box.rowconfigure(0, weight=1)
-        right.rowconfigure(2, weight=1)
+            self.rules_canvas = tk.Canvas(rules_area, height=260)
+            self.rules_canvas.grid(row=0, column=0, sticky="nsew")
 
-        self.rules_canvas = tk.Canvas(rules_box, height=220)
-        self.rules_canvas.grid(row=0, column=0, sticky="nsew")
+            rules_scroll = ttk.Scrollbar(rules_area, orient="vertical", command=self.rules_canvas.yview)
+            rules_scroll.grid(row=0, column=1, sticky="ns")
+            self.rules_canvas.configure(yscrollcommand=rules_scroll.set)
 
-        rules_scroll = ttk.Scrollbar(rules_box, orient="vertical", command=self.rules_canvas.yview)
-        rules_scroll.grid(row=0, column=1, sticky="ns")
-        self.rules_canvas.configure(yscrollcommand=rules_scroll.set)
+            self.rules_frame = ttk.Frame(self.rules_canvas)
+            self.rules_canvas.create_window((0, 0), window=self.rules_frame, anchor="nw")
 
-        self.rules_frame = ttk.Frame(self.rules_canvas)
-        self.rules_canvas.create_window((0, 0), window=self.rules_frame, anchor="nw")
+            self.rules_frame.bind(
+                "<Configure>",
+                lambda e: self.rules_canvas.configure(scrollregion=self.rules_canvas.bbox("all")),
+            )
 
-        self.rules_frame.bind(
-            "<Configure>",
-            lambda e: self.rules_canvas.configure(scrollregion=self.rules_canvas.bbox("all")),
-        )
+            # ----- DESTINATION -----
+            dest_box = ttk.LabelFrame(right, text="Destination", padding=10)
+            dest_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+            dest_box.columnconfigure(1, weight=1)
 
-        ttk.Button(rules_box, text="+ Add Rule", command=self.add_rule).grid(row=1, column=0, sticky="w", pady=(6, 0))
+            ttk.Label(dest_box, text="File:").grid(row=0, column=0, sticky="w")
+            self.dest_file_var = tk.StringVar()
+            ttk.Entry(dest_box, textvariable=self.dest_file_var).grid(row=0, column=1, sticky="ew", padx=(10, 10))
+            ttk.Button(dest_box, text="Browse", command=self.browse_destination).grid(row=0, column=2, sticky="ew")
+            self.dest_file_var.trace_add("write", self._push_editor_to_sheet)
 
-        # Context menu (Source only)
-        self._source_menu = tk.Menu(self, tearoff=0)
-        self._source_menu.add_command(label="Save Template...", command=self._ctx_save_template)
-        self._source_menu.add_command(label="Load Template...", command=self._ctx_load_template)
-        self._source_menu.add_separator()
-        self._source_menu.add_command(label="Set Default", command=self._ctx_set_default)
-        self._source_menu.add_command(label="Reset Default", command=self._ctx_reset_default)
-        self._ctx_source_index: Optional[int] = None
+            ttk.Label(dest_box, text="Sheet name:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+            self.dest_sheet_var = tk.StringVar()
+            ttk.Entry(dest_box, textvariable=self.dest_sheet_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(10, 0), pady=(6, 0))
+            self.dest_sheet_var.trace_add("write", self._push_editor_to_sheet)
 
-        # Context menu (Recipe)
-        self._recipe_menu = tk.Menu(self, tearoff=0)
-        self._recipe_menu.add_command(label="Rename Recipe", command=self._ctx_rename_recipe)
-        self._ctx_recipe_path: Optional[list[int]] = None
+            ttk.Label(dest_box, text="Start column (e.g., A, D, AA):").grid(row=2, column=0, sticky="w", pady=(6, 0))
+            start_row = ttk.Frame(dest_box)
+            start_row.grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=(6, 0))
 
-        # Context menu (Sheet)
-        self._sheet_menu = tk.Menu(self, tearoff=0)
-        self._sheet_menu.add_command(label="Rename Sheet", command=self._ctx_rename_sheet)
-        self._ctx_sheet_path: Optional[list[int]] = None
+            self.start_col_var = tk.StringVar()
+            ttk.Entry(start_row, textvariable=self.start_col_var, width=8).grid(row=0, column=0, sticky="w")
+            self.start_col_var.trace_add("write", self._push_editor_to_sheet)
 
-        # Run buttons (wired to core engine; no business logic here)
-        feedback_box = ttk.LabelFrame(right, text="Run Feedback", padding=8)
-        feedback_box.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
-        feedback_box.columnconfigure(0, weight=1)
-        feedback_box.rowconfigure(0, weight=1)
+            ttk.Label(start_row, text="Start row:").grid(row=0, column=1, sticky="w", padx=(15, 6))
+            self.start_row_var = tk.StringVar()
+            ttk.Entry(start_row, textvariable=self.start_row_var, width=10).grid(row=0, column=2, sticky="w")
+            self.start_row_var.trace_add("write", self._push_editor_to_sheet)
 
-        self.feedback_tree = ttk.Treeview(
-            feedback_box,
-            columns=("status", "rows", "message"),
-            show="headings",
-            height=7,
-        )
-        self.feedback_tree.grid(row=0, column=0, sticky="nsew")
-        self.feedback_tree.heading("status", text="Status")
-        self.feedback_tree.heading("rows", text="Rows")
-        self.feedback_tree.heading("message", text="Message")
-        self.feedback_tree.column("status", width=110, anchor="w")
-        self.feedback_tree.column("rows", width=70, anchor="center")
-        self.feedback_tree.column("message", width=600, anchor="w")
+            # ----- BOTTOM: STATUS + RUN BUTTONS -----
+            bottom = ttk.Frame(right)
+            bottom.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+            bottom.columnconfigure(0, weight=1)
 
-        fb_scroll = ttk.Scrollbar(feedback_box, orient="vertical", command=self.feedback_tree.yview)
-        fb_scroll.grid(row=0, column=1, sticky="ns")
-        self.feedback_tree.configure(yscrollcommand=fb_scroll.set)
+            self.status_var = tk.StringVar(value="Idle")
+            ttk.Label(bottom, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
 
-        self.feedback_status_var = tk.StringVar(value="Idle")
-        ttk.Label(feedback_box, textvariable=self.feedback_status_var).grid(row=1, column=0, sticky="w", pady=(6, 0))
+            # Make RUN buttons visually closer to monolith (blue accent).
+            try:
+                style = ttk.Style()
+                if style.theme_use() != "clam":
+                    style.theme_use("clam")
+                style.configure("RunAccent.TButton", padding=(16, 6))
+                style.map(
+                    "RunAccent.TButton",
+                    background=[("active", "#1e6bd6"), ("!disabled", "#1f76ff")],
+                    foreground=[("!disabled", "white")],
+                )
+            except Exception:
+                # If theme/style cannot be applied, fall back to default styling.
+                pass
 
-        right.rowconfigure(3, weight=1)
+            run_btns = ttk.Frame(bottom)
+            run_btns.grid(row=0, column=1, sticky="e")
 
-        run_box = ttk.Frame(right)
-        run_box.grid(row=4, column=0, sticky="e", pady=(10, 0))
-        ttk.Button(run_box, text="RUN", command=self.run_selected_sheet).pack(side="right")
-        ttk.Button(run_box, text="RUN ALL", command=self.run_all).pack(side="right", padx=(0, 8))
+            ttk.Button(run_btns, text="RUN", style="RunAccent.TButton", command=self.run_selected_sheet).pack(side="right", padx=(6, 0))
+            ttk.Button(run_btns, text="RUN ALL", style="RunAccent.TButton", command=self.run_all).pack(side="right")
 
-        self._clear_editor()
+            # Context menu (Source only)
+            self._source_menu = tk.Menu(self, tearoff=0)
+            self._source_menu.add_command(label="Save Template...", command=self._ctx_save_template)
+            self._source_menu.add_command(label="Load Template...", command=self._ctx_load_template)
+            self._source_menu.add_separator()
+            self._source_menu.add_command(label="Set Default", command=self._ctx_set_default)
+            self._source_menu.add_command(label="Reset Default", command=self._ctx_reset_default)
+            self._ctx_source_index: Optional[int] = None
 
-    # ---------------- Autosave ----------------
+            # Context menu (Recipe)
+            self._recipe_menu = tk.Menu(self, tearoff=0)
+            self._recipe_menu.add_command(label="Rename Recipe", command=self._ctx_rename_recipe)
+            self._ctx_recipe_path: Optional[list[int]] = None
 
+            # Context menu (Sheet)
+            self._sheet_menu = tk.Menu(self, tearoff=0)
+            self._sheet_menu.add_command(label="Rename Sheet", command=self._ctx_rename_sheet)
+            self._ctx_sheet_path: Optional[list[int]] = None
     def _mark_dirty(self) -> None:
         self._autosave_dirty = True
         self._schedule_debounced_autosave()
@@ -524,6 +547,18 @@ class TurboExtractorApp(tk.Tk):
         sheet.workbook_sheet = new_name
     # ---------------- Structure actions ----------------
 
+    
+    def browse_destination(self) -> None:
+        # Choose destination XLSX (create or select). GUI only.
+        path = filedialog.asksaveasfilename(
+            title="Select destination XLSX",
+            defaultextension=".xlsx",
+            filetypes=[("Excel Workbook", "*.xlsx")],
+        )
+        if not path:
+            return
+        self.dest_file_var.set(path)
+
     def add_sources(self) -> None:
         paths = filedialog.askopenfilenames(
             title="Add source file(s)",
@@ -655,48 +690,52 @@ class TurboExtractorApp(tk.Tk):
 
     # ---------------- Run wiring ----------------
 
+
     def _feedback_clear(self) -> None:
-        for item in self.feedback_tree.get_children():
-            self.feedback_tree.delete(item)
-        self.feedback_status_var.set("Running...")
+        # GUI-only feedback. In the monolith-like layout we primarily use the popup summary.
+        # Keep these helpers as no-ops / minimal status updates for backward compatibility.
+        if hasattr(self, "status_var"):
+            self.status_var.set("Running...")
 
     def _feedback_key(self, source_path: str, recipe_name: str, sheet_name: str) -> str:
         base = os.path.basename(source_path)
         return f"{base} | {recipe_name} / {sheet_name}"
 
     def _feedback_set_row(self, key: str, status: str, rows: str, message: str) -> None:
-        # Find existing row by key in Message column (stable id would require tagging; keep simple).
-        for iid in self.feedback_tree.get_children():
-            vals = self.feedback_tree.item(iid, "values")
-            if vals and len(vals) == 3 and vals[2].startswith(key + " —"):
-                self.feedback_tree.item(iid, values=(status, rows, message))
-                return
-        self.feedback_tree.insert("", "end", values=(status, rows, message))
+        # If a feedback tree is present (older layout), update it. Otherwise ignore.
+        tree = getattr(self, "feedback_tree", None)
+        if tree is None:
+            return
+        # Find existing row by key
+        existing = None
+        for item in tree.get_children():
+            if tree.item(item, "text") == key:
+                existing = item
+                break
+        if existing is None:
+            existing = tree.insert("", "end", text=key, values=(status, rows, message))
+        else:
+            tree.item(existing, values=(status, rows, message))
 
-    def _feedback_progress_callback(self, event: str, payload) -> None:
+    def _feedback_progress_callback(self, event, payload=None, *args) -> None:
+        """Progress hook used by RUN ALL + local RUN, tolerant of legacy call shapes."""
+        # Supported call forms:
+        # 1) callback(progress_item)
+        # 2) callback(event, payload)
         try:
-            if event == "start":
-                key = self._feedback_key(payload["source_path"], payload["recipe_name"], payload["sheet_name"])
-                self._feedback_set_row(key, "RUNNING", "", f"{key} — running")
-            elif event in ("result", "error"):
-                res = payload
-                key = self._feedback_key(res.source_path, res.recipe_name, res.sheet_name)
-                if getattr(res, "error_code", None):
-                    msg = f"{key} — {res.error_code}: {res.error_message}"
-                    self._feedback_set_row(key, "ERROR", "0", msg)
-                else:
-                    msg = f"{key} — {res.rows_written} rows"
-                    self._feedback_set_row(key, "OK", str(res.rows_written), msg)
-            elif event == "done":
-                report = payload
-                self.feedback_status_var.set("Done" if report.ok else "Done (with errors)")
-        finally:
-            # Keep UI responsive during long runs.
-            try:
-                self.update_idletasks()
-            except Exception:
-                pass
-
+            progress_item = event if payload is None and hasattr(event, 'source_path') else payload
+            if progress_item is None:
+                return
+            key = self._feedback_key(progress_item.source_path, progress_item.recipe_name, progress_item.sheet_name)
+            status = getattr(progress_item, 'status', None) or getattr(progress_item, 'message', '') or ''
+            rows_written = getattr(progress_item, 'rows_written', None)
+            if rows_written is None:
+                rows_written = getattr(progress_item, 'rows_written', None)
+            rows = '' if getattr(progress_item, 'rows_written', None) is None else str(getattr(progress_item, 'rows_written'))
+            msg = getattr(progress_item, 'message', '') or ''
+            self._feedback_set_row(key, str(status), rows, msg)
+        except Exception:
+            return
     def _format_run_report(self, report) -> str:
         lines = []
         for r in report.results:
@@ -840,7 +879,7 @@ class TurboExtractorApp(tk.Tk):
         self.columns_var.set(sheet.columns_spec)
         self.rows_var.set(sheet.rows_spec)
         self.source_start_row_var.set(getattr(sheet, "source_start_row", ""))
-        self.paste_var.set(sheet.paste_mode)
+        self.paste_var.set("Pack Together" if sheet.paste_mode == "pack" else "Keep Format" if sheet.paste_mode == "keep" else sheet.paste_mode)
         self.combine_var.set(sheet.rules_combine)
 
         self.dest_file_var.set(sheet.destination.file_path)
@@ -871,8 +910,15 @@ class TurboExtractorApp(tk.Tk):
         self.current_sheet.columns_spec = self.columns_var.get()
         self.current_sheet.rows_spec = self.rows_var.get()
         self.current_sheet.source_start_row = self.source_start_row_var.get()
-        if self.paste_var.get():
-            self.current_sheet.paste_mode = self.paste_var.get()
+        val = self.paste_var.get().strip()
+        if val:
+            if val.lower().startswith("pack"):
+                self.current_sheet.paste_mode = "pack"
+            elif val.lower().startswith("keep"):
+                self.current_sheet.paste_mode = "keep"
+            else:
+                # Backwards compatibility (older UI stored raw values)
+                self.current_sheet.paste_mode = val
         if self.combine_var.get():
             self.current_sheet.rules_combine = self.combine_var.get()
 

@@ -8,6 +8,7 @@ from typing import Optional
 
 from core.project import ProjectConfig, SourceConfig, RecipeConfig
 from core.models import SheetConfig, Destination, Rule
+from core import templates as tpl
 from core.engine import run_all as engine_run_all, run_sheet as engine_run_sheet
 from core.errors import AppError
 from core.autosave import resolve_autosave_path, save_project_atomic, load_project_if_exists
@@ -73,6 +74,7 @@ class TurboExtractorApp(tk.Tk):
         self.tree = ttk.Treeview(left, show="tree", selectmode="browse")
         self.tree.grid(row=0, column=0, sticky="nsew")
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
 
         yscroll = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         yscroll.grid(row=0, column=1, sticky="ns")
@@ -169,6 +171,15 @@ class TurboExtractorApp(tk.Tk):
         )
 
         ttk.Button(rules_box, text="+ Add Rule", command=self.add_rule).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        # Context menu (Source only)
+        self._source_menu = tk.Menu(self, tearoff=0)
+        self._source_menu.add_command(label="Save Template...", command=self._ctx_save_template)
+        self._source_menu.add_command(label="Load Template...", command=self._ctx_load_template)
+        self._source_menu.add_separator()
+        self._source_menu.add_command(label="Set Default", command=self._ctx_set_default)
+        self._source_menu.add_command(label="Reset Default", command=self._ctx_reset_default)
+        self._ctx_source_index: Optional[int] = None
 
         # Run buttons (wired to core engine; no business logic here)
         run_box = ttk.Frame(right)
@@ -270,6 +281,66 @@ class TurboExtractorApp(tk.Tk):
             self.current_recipe_name = None
             self._clear_editor()
 
+    def _on_tree_right_click(self, event) -> None:
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        self.tree.selection_set(item)
+        path = self._get_tree_path(item)
+        if len(path) != 1:
+            return
+        self._ctx_source_index = path[0]
+        try:
+            self._source_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._source_menu.grab_release()
+
+    # ---------------- Templates / Default (Source context menu) ----------------
+
+    def _get_ctx_source(self) -> Optional[SourceConfig]:
+        if self._ctx_source_index is None:
+            return None
+        if 0 <= self._ctx_source_index < len(self.project.sources):
+            return self.project.sources[self._ctx_source_index]
+        return None
+
+    def _ctx_save_template(self) -> None:
+        src = self._get_ctx_source()
+        if not src:
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save Source Template",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        tpl.save_template_json(tpl.source_to_template(src), path)
+
+    def _ctx_load_template(self) -> None:
+        src = self._get_ctx_source()
+        if not src:
+            return
+        path = filedialog.askopenfilename(
+            title="Load Source Template",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        template = tpl.load_template_json(path)
+        tpl.apply_template_to_source(src, template)
+        self.refresh_tree()
+        self._mark_dirty()
+
+    def _ctx_set_default(self) -> None:
+        src = self._get_ctx_source()
+        if not src:
+            return
+        tpl.set_default_template(tpl.source_to_template(src))
+
+    def _ctx_reset_default(self) -> None:
+        tpl.reset_default_template()
+
     # ---------------- Structure actions ----------------
 
     def add_sources(self) -> None:
@@ -280,10 +351,17 @@ class TurboExtractorApp(tk.Tk):
         if not paths:
             return
 
+        default_template = tpl.load_default_template()
+
         for p in paths:
-            sheet = self._make_default_sheet(name="Sheet1")
-            recipe = RecipeConfig(name="Recipe1", sheets=[sheet])
-            self.project.sources.append(SourceConfig(path=p, recipes=[recipe]))
+            src = SourceConfig(path=p, recipes=[])
+            if default_template:
+                tpl.apply_template_to_source(src, default_template)
+            else:
+                sheet = self._make_default_sheet(name="Sheet1")
+                recipe = RecipeConfig(name="Recipe1", sheets=[sheet])
+                src.recipes = [recipe]
+            self.project.sources.append(src)
 
         self.refresh_tree()
         self._mark_dirty()

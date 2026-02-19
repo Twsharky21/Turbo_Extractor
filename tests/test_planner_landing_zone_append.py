@@ -32,26 +32,22 @@ def test_append_uses_max_used_row_across_landing_cols():
     assert plan.landing_rows == (11, 12)
 
 
-def test_append_collision_probe_blocks_if_any_cell_in_rectangle_occupied():
+def test_append_skips_past_any_used_cells_in_landing_zone():
     wb, ws = make_ws_with_values()
 
-    # D/E landing zone, width=2; max used row in D/E is 3 -> append_row 4
+    # D/E landing zone, width=2
     ws["D3"] = "x"
-    # Put a blocker inside the rectangle at the computed append row
     ws["E4"] = "BLOCK"
 
-    shaped = [["a", "b"], ["c", "d"]]  # would write into D4:E5
+    shaped = [["a", "b"], ["c", "d"]]  # height=2, width=2
 
-    with pytest.raises(AppError) as ei:
-        build_plan(ws, shaped, start_col_letters="D", start_row_str="")
-
-    assert ei.value.code == DEST_BLOCKED
-    assert ei.value.details is not None
-    assert ei.value.details["first_blocker"]["col_letter"] == "E"
-    assert ei.value.details["first_blocker"]["row"] == 4
+    # Full landing-zone awareness means append after the max used row across D/E (which is 4)
+    plan = build_plan(ws, shaped, start_col_letters="D", start_row_str="")
+    assert plan is not None
+    assert plan.start_row == 5  # max used row across D/E is 4 -> append at 5
 
 
-def test_explicit_start_row_no_append_scan_but_still_probes_collision():
+def test_explicit_start_row_collision_probe_blocks():
     wb, ws = make_ws_with_values()
 
     ws["D50"] = "BLOCK"

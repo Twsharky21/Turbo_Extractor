@@ -7,6 +7,8 @@ from typing import Optional
 
 from core.project import ProjectConfig, SourceConfig, RecipeConfig
 from core.models import SheetConfig, Destination, Rule
+from core.engine import run_all as engine_run_all, run_sheet as engine_run_sheet
+from core.errors import AppError
 
 
 class TurboExtractorApp(tk.Tk):
@@ -28,6 +30,8 @@ class TurboExtractorApp(tk.Tk):
 
         self.project: ProjectConfig = ProjectConfig()
         self.current_sheet: Optional[SheetConfig] = None
+        self.current_source_path: Optional[str] = None
+        self.current_recipe_name: Optional[str] = None
 
         self._build_ui()
 
@@ -147,6 +151,12 @@ class TurboExtractorApp(tk.Tk):
 
         ttk.Button(rules_box, text="+ Add Rule", command=self.add_rule).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
+        # Run buttons (wired to core engine; no business logic here)
+        run_box = ttk.Frame(right)
+        run_box.grid(row=3, column=0, sticky="e", pady=(10, 0))
+        ttk.Button(run_box, text="RUN", command=self.run_selected_sheet).pack(side="right")
+        ttk.Button(run_box, text="RUN ALL", command=self.run_all).pack(side="right", padx=(0, 8))
+
         self._clear_editor()
 
     # ---------------- Tree helpers ----------------
@@ -182,9 +192,13 @@ class TurboExtractorApp(tk.Tk):
         path = self._get_tree_path(sel[0])
         if len(path) == 3:
             self.current_sheet = self.project.sources[path[0]].recipes[path[1]].sheets[path[2]]
+            self.current_source_path = self.project.sources[path[0]].path
+            self.current_recipe_name = self.project.sources[path[0]].recipes[path[1]].name
             self._load_sheet_into_editor(self.current_sheet)
         else:
             self.current_sheet = None
+            self.current_source_path = None
+            self.current_recipe_name = None
             self._clear_editor()
 
     # ---------------- Structure actions ----------------
@@ -254,8 +268,38 @@ class TurboExtractorApp(tk.Tk):
                 del source.recipes[path[1]]
 
         self.current_sheet = None
+        self.current_source_path = None
+        self.current_recipe_name = None
         self.refresh_tree()
         self._clear_editor()
+
+    # ---------------- Run wiring ----------------
+
+    def _format_run_report(self, report) -> str:
+        lines = []
+        for r in report.results:
+            label = f"{r.recipe_name} / {r.sheet_name}"
+            if getattr(r, "error_code", None):
+                lines.append(f"{label}: ERROR {r.error_code} - {r.error_message}")
+            else:
+                lines.append(f"{label}: {r.rows_written} rows")
+        return "\n".join(lines) if lines else "No work items."
+
+    def run_all(self) -> None:
+        items = self.project.build_run_items()
+        report = engine_run_all(items)
+        title = "Run complete" if report.ok else "Run complete (with errors)"
+        messagebox.showinfo(title, self._format_run_report(report))
+
+    def run_selected_sheet(self) -> None:
+        if not self.current_sheet or not self.current_source_path or not self.current_recipe_name:
+            messagebox.showwarning("Select Sheet", "Select a Sheet to run.")
+            return
+        try:
+            res = engine_run_sheet(self.current_source_path, self.current_sheet, recipe_name=self.current_recipe_name)
+            messagebox.showinfo("Run complete", f"{res.recipe_name} / {res.sheet_name}: {res.rows_written} rows")
+        except AppError as e:
+            messagebox.showerror("Run failed", f"{e.code}: {e.message}")
 
     def _make_default_sheet(self, name: str) -> SheetConfig:
         return SheetConfig(

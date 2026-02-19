@@ -1,15 +1,14 @@
 \
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Optional, List, Any
+from typing import List, Any, Iterable, Tuple
 import os
 
 from openpyxl import Workbook, load_workbook
 
 from .errors import AppError, SOURCE_READ_FAILED, SHEET_NOT_FOUND
-from .models import SheetConfig, SheetResult
-from .parsing import parse_columns, parse_rows, col_letters_to_index
+from .models import SheetConfig, SheetResult, RunReport
+from .parsing import parse_columns, parse_rows
 from .io import load_csv, load_xlsx, compute_used_range, normalize_table
 from .rules import apply_rules
 from .transform import apply_row_selection, apply_column_selection, shape_pack, shape_keep
@@ -22,11 +21,11 @@ def _load_source_table(source_path: str, workbook_sheet: str) -> List[List[Any]]
     try:
         if ext == ".csv":
             return load_csv(source_path)
-        # default to xlsx
         return load_xlsx(source_path, workbook_sheet)
     except ValueError as e:
-        # sheet not found from load_xlsx
         raise AppError(SHEET_NOT_FOUND, str(e))
+    except AppError:
+        raise
     except Exception as e:
         raise AppError(SOURCE_READ_FAILED, f"Failed to read source: {e}")
 
@@ -34,15 +33,13 @@ def _load_source_table(source_path: str, workbook_sheet: str) -> List[List[Any]]
 def _open_or_create_dest(dest_path: str) -> Workbook:
     if dest_path and os.path.exists(dest_path):
         return load_workbook(dest_path)
-    wb = Workbook()
-    return wb
+    return Workbook()
 
 
 def _get_or_create_sheet(wb: Workbook, name: str):
     if name in wb.sheetnames:
         return wb[name]
     ws = wb.create_sheet(title=name)
-    # If this is a brand new workbook, remove the default "Sheet" if it's empty and not wanted
     if len(wb.sheetnames) > 1 and "Sheet" in wb.sheetnames:
         default = wb["Sheet"]
         if default.max_row == 1 and default.max_column == 1 and default["A1"].value in (None, ""):
@@ -51,50 +48,30 @@ def _get_or_create_sheet(wb: Workbook, name: str):
 
 
 def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Recipe") -> SheetResult:
-    """
-    End-to-end run for a single sheet config:
-      load -> used range -> row select -> rules -> col select -> paste shape -> plan -> write -> save
-    """
     table = _load_source_table(source_path, sheet_cfg.workbook_sheet)
 
-    # Used range (for blank specs => ALL used)
     used_h, used_w = compute_used_range(table)
     table = normalize_table(table)
 
-    # Row selection indices
     row_indices = parse_rows(sheet_cfg.rows_spec)
     if not row_indices:
         row_indices = list(range(used_h))
 
-    # Apply row selection first
     table_rows = apply_row_selection(table, row_indices)
 
-    # Apply rules (absolute columns)
     table_rows = apply_rules(table_rows, sheet_cfg.rules, sheet_cfg.rules_combine)
 
-    # Column selection indices (absolute)
     col_indices = parse_columns(sheet_cfg.columns_spec)
     if not col_indices:
         col_indices = list(range(used_w))
 
     selected = apply_column_selection(table_rows, col_indices)
 
-    # Shape
     if sheet_cfg.paste_mode == "keep":
-        # Keep mode bounding box in current simplified model:
-        # preserves gaps from column selection and original row selection (not from rule removals).
-        # We shape against the row-selected table to preserve row gaps.
         shaped = shape_keep(table, row_indices, col_indices)
-        # Then re-apply rules to zero out rows that were removed (convert them to all-None rows)
-        if sheet_cfg.rules:
-            kept = apply_rules(apply_row_selection(table, row_indices), sheet_cfg.rules, sheet_cfg.rules_combine)
-            kept_set = {id(r) for r in kept}
-            # Any row in shaped that corresponds to a removed row stays as None row already; no action needed.
-            # (This placeholder keeps keep-mode deterministic; full fidelity can be improved later.)
     else:
         shaped = shape_pack(selected)
 
-    # Destination open/create
     dest_path = sheet_cfg.destination.file_path
     wb = _open_or_create_dest(dest_path)
     ws = _get_or_create_sheet(wb, sheet_cfg.destination.sheet_name)
@@ -116,3 +93,55 @@ def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Reci
         rows_written=rows_written,
         message="OK" if rows_written > 0 else "0 rows written",
     )
+
+
+RunItem = Tuple[str, str, SheetConfig]
+"""
+(source_path, recipe_name, sheet_cfg)
+"""
+
+
+def run_all(items: Iterable[RunItem]) -> RunReport:
+    results: List[SheetResult] = []
+    ok = True
+
+    for (source_path, recipe_name, sheet_cfg) in items:
+        try:
+            res = run_sheet(source_path, sheet_cfg, recipe_name=recipe_name)
+            results.append(res)
+        except AppError as e:
+            ok = False
+            results.append(
+                SheetResult(
+                    source_path=source_path,
+                    recipe_name=recipe_name,
+                    sheet_name=sheet_cfg.name,
+                    dest_file=sheet_cfg.destination.file_path,
+                    dest_sheet=sheet_cfg.destination.sheet_name,
+                    rows_written=0,
+                    message="ERROR",
+                    error_code=e.code,
+                    error_message=e.message,
+                    error_details=e.details,
+                )
+            )
+            break
+        except Exception as e:
+            ok = False
+            results.append(
+                SheetResult(
+                    source_path=source_path,
+                    recipe_name=recipe_name,
+                    sheet_name=sheet_cfg.name,
+                    dest_file=sheet_cfg.destination.file_path,
+                    dest_sheet=sheet_cfg.destination.sheet_name,
+                    rows_written=0,
+                    message="ERROR",
+                    error_code="UNEXPECTED",
+                    error_message=str(e),
+                    error_details=None,
+                )
+            )
+            break
+
+    return RunReport(ok=ok, results=results)

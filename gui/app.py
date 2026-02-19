@@ -65,6 +65,8 @@ class TurboExtractorApp(tk.Tk):
         btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
         ttk.Button(btns, text="Add Source(s)...", command=self.add_sources).pack(side="left")
+        ttk.Button(btns, text="Move Source Up", command=self.move_source_up).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Move Source Down", command=self.move_source_down).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Add Recipe", command=self.add_recipe).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Add Sheet", command=self.add_sheet).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Remove Selected", command=self.remove_selected).pack(side="left", padx=(6, 0))
@@ -217,6 +219,52 @@ class TurboExtractorApp(tk.Tk):
             self.project.sources.append(SourceConfig(path=p, recipes=[recipe]))
 
         self.refresh_tree()
+
+    def move_source_up(self) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        path = self._get_tree_path(sel[0])
+        if len(path) != 1:
+            messagebox.showinfo("Move Source", "Please select a Source (top-level) to move.")
+            return
+
+        idx = path[0]
+        if idx <= 0:
+            return
+
+        self.project.sources[idx - 1], self.project.sources[idx] = self.project.sources[idx], self.project.sources[idx - 1]
+        moved_path = self.project.sources[idx - 1].path
+        self.refresh_tree()
+        self._select_source_by_path(moved_path)
+
+    def move_source_down(self) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        path = self._get_tree_path(sel[0])
+        if len(path) != 1:
+            messagebox.showinfo("Move Source", "Please select a Source (top-level) to move.")
+            return
+
+        idx = path[0]
+        if idx >= len(self.project.sources) - 1:
+            return
+
+        self.project.sources[idx + 1], self.project.sources[idx] = self.project.sources[idx], self.project.sources[idx + 1]
+        moved_path = self.project.sources[idx + 1].path
+        self.refresh_tree()
+        self._select_source_by_path(moved_path)
+
+    def _select_source_by_path(self, source_path: str) -> None:
+        for item_id in self.tree.get_children(""):
+            if self.tree.item(item_id, "text") == source_path:
+                self.tree.selection_set(item_id)
+                self.tree.see(item_id)
+                self._on_tree_select()
+                return
 
     def add_recipe(self) -> None:
         sel = self.tree.selection()

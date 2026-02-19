@@ -5,14 +5,18 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import Optional
 
-from core.engine import run_all
 from core.project import ProjectConfig, SourceConfig, RecipeConfig
 from core.models import SheetConfig, Destination
 
 
 class TurboExtractorApp(tk.Tk):
     """
-    V3 Minimal GUI with Sheet Editor wiring.
+    V3 GUI — Tree structure management added.
+    Supports:
+    - Add Source(s)
+    - Add Recipe
+    - Add Sheet
+    - Remove Selected (with auto-delete empty recipe)
     """
 
     def __init__(self) -> None:
@@ -51,6 +55,14 @@ class TurboExtractorApp(tk.Tk):
         yscroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=yscroll.set)
 
+        btns = ttk.Frame(left)
+        btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+        ttk.Button(btns, text="Add Source(s)...", command=self.add_sources).pack(side="left")
+        ttk.Button(btns, text="Add Recipe", command=self.add_recipe).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Add Sheet", command=self.add_sheet).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Remove Selected", command=self.remove_selected).pack(side="left", padx=(6, 0))
+
         # ----- RIGHT PANEL -----
         right = ttk.LabelFrame(root, text="Selected Sheet", padding=8)
         right.grid(row=0, column=1, sticky="nsew")
@@ -58,67 +70,125 @@ class TurboExtractorApp(tk.Tk):
 
         ttk.Label(right, text="Columns:").grid(row=0, column=0, sticky="w")
         self.columns_var = tk.StringVar()
-        self.columns_entry = ttk.Entry(right, textvariable=self.columns_var)
-        self.columns_entry.grid(row=0, column=1, sticky="ew")
+        ttk.Entry(right, textvariable=self.columns_var).grid(row=0, column=1, sticky="ew")
         self.columns_var.trace_add("write", self._push_editor_to_sheet)
 
-        ttk.Label(right, text="Rows:").grid(row=1, column=0, sticky="w")
-        self.rows_var = tk.StringVar()
-        self.rows_entry = ttk.Entry(right, textvariable=self.rows_var)
-        self.rows_entry.grid(row=1, column=1, sticky="ew")
-        self.rows_var.trace_add("write", self._push_editor_to_sheet)
+    # ---------------- Tree Structure ----------------
 
-        ttk.Label(right, text="Paste Mode:").grid(row=2, column=0, sticky="w")
-        self.paste_var = tk.StringVar()
-        self.paste_combo = ttk.Combobox(
-            right, textvariable=self.paste_var,
-            values=["pack", "keep"], state="readonly"
+    def add_sources(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Add source file(s)",
+            filetypes=[("Excel/CSV", "*.xlsx *.xlsm *.csv"), ("All files", "*.*")]
         )
-        self.paste_combo.grid(row=2, column=1, sticky="ew")
-        self.paste_combo.bind("<<ComboboxSelected>>", self._push_editor_to_sheet)
+        if not paths:
+            return
 
-        ttk.Label(right, text="Dest File:").grid(row=3, column=0, sticky="w")
-        self.dest_file_var = tk.StringVar()
-        self.dest_file_entry = ttk.Entry(right, textvariable=self.dest_file_var)
-        self.dest_file_entry.grid(row=3, column=1, sticky="ew")
-        self.dest_file_var.trace_add("write", self._push_editor_to_sheet)
+        for p in paths:
+            default_sheet = SheetConfig(
+                name="Sheet1",
+                workbook_sheet="Sheet1",
+                columns_spec="",
+                rows_spec="",
+                paste_mode="pack",
+                rules_combine="AND",
+                rules=[],
+                destination=Destination(
+                    file_path="",
+                    sheet_name="Sheet1",
+                    start_col="A",
+                    start_row="",
+                ),
+            )
+            recipe = RecipeConfig(name="Recipe1", sheets=[default_sheet])
+            source = SourceConfig(path=p, recipes=[recipe])
+            self.project.sources.append(source)
 
-        ttk.Label(right, text="Dest Sheet:").grid(row=4, column=0, sticky="w")
-        self.dest_sheet_var = tk.StringVar()
-        self.dest_sheet_entry = ttk.Entry(right, textvariable=self.dest_sheet_var)
-        self.dest_sheet_entry.grid(row=4, column=1, sticky="ew")
-        self.dest_sheet_var.trace_add("write", self._push_editor_to_sheet)
+        self.refresh_tree()
 
-        ttk.Label(right, text="Start Col:").grid(row=5, column=0, sticky="w")
-        self.start_col_var = tk.StringVar()
-        self.start_col_entry = ttk.Entry(right, textvariable=self.start_col_var)
-        self.start_col_entry.grid(row=5, column=1, sticky="ew")
-        self.start_col_var.trace_add("write", self._push_editor_to_sheet)
+    def add_recipe(self) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("Select Source", "Select a Source to add a Recipe.")
+            return
 
-        ttk.Label(right, text="Start Row:").grid(row=6, column=0, sticky="w")
-        self.start_row_var = tk.StringVar()
-        self.start_row_entry = ttk.Entry(right, textvariable=self.start_row_var)
-        self.start_row_entry.grid(row=6, column=1, sticky="ew")
-        self.start_row_var.trace_add("write", self._push_editor_to_sheet)
+        path = self._get_tree_path(sel[0])
+        if len(path) != 1:
+            messagebox.showwarning("Select Source", "Select a Source to add a Recipe.")
+            return
 
-    # ---------------- Tree Binding ----------------
+        source = self.project.sources[path[0]]
+        source.recipes.append(RecipeConfig(name=f"Recipe{len(source.recipes)+1}", sheets=[]))
+        self.refresh_tree()
 
-    def _on_tree_select(self, event=None) -> None:
+    def add_sheet(self) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("Select Recipe", "Select a Recipe to add a Sheet.")
+            return
+
+        path = self._get_tree_path(sel[0])
+        if len(path) != 2:
+            messagebox.showwarning("Select Recipe", "Select a Recipe to add a Sheet.")
+            return
+
+        source = self.project.sources[path[0]]
+        recipe = source.recipes[path[1]]
+
+        new_sheet = SheetConfig(
+            name=f"Sheet{len(recipe.sheets)+1}",
+            workbook_sheet="Sheet1",
+            columns_spec="",
+            rows_spec="",
+            paste_mode="pack",
+            rules_combine="AND",
+            rules=[],
+            destination=Destination(
+                file_path="",
+                sheet_name="Sheet1",
+                start_col="A",
+                start_row="",
+            ),
+        )
+        recipe.sheets.append(new_sheet)
+        self.refresh_tree()
+
+    def remove_selected(self) -> None:
         sel = self.tree.selection()
         if not sel:
             return
-        item_id = sel[0]
-        path = self._get_tree_path(item_id)
 
-        # path depth: [source], [source, recipe], [source, recipe, sheet]
-        if len(path) == 3:
-            source_idx, recipe_idx, sheet_idx = path
-            sheet = self.project.sources[source_idx].recipes[recipe_idx].sheets[sheet_idx]
-            self.current_sheet = sheet
-            self._load_sheet_into_editor(sheet)
-        else:
-            self.current_sheet = None
-            self._clear_editor()
+        path = self._get_tree_path(sel[0])
+
+        if len(path) == 1:
+            del self.project.sources[path[0]]
+
+        elif len(path) == 2:
+            source = self.project.sources[path[0]]
+            del source.recipes[path[1]]
+
+        elif len(path) == 3:
+            source = self.project.sources[path[0]]
+            recipe = source.recipes[path[1]]
+            del recipe.sheets[path[2]]
+
+            if not recipe.sheets:
+                del source.recipes[path[1]]
+
+        self.current_sheet = None
+        self.refresh_tree()
+
+    # ---------------- Tree Helpers ----------------
+
+    def refresh_tree(self) -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for s_idx, source in enumerate(self.project.sources):
+            s_id = self.tree.insert("", "end", text=source.path)
+            for r_idx, recipe in enumerate(source.recipes):
+                r_id = self.tree.insert(s_id, "end", text=recipe.name)
+                for sh_idx, sheet in enumerate(recipe.sheets):
+                    self.tree.insert(r_id, "end", text=sheet.name)
 
     def _get_tree_path(self, item_id):
         path = []
@@ -132,48 +202,19 @@ class TurboExtractorApp(tk.Tk):
 
     # ---------------- Editor Binding ----------------
 
-    def _load_sheet_into_editor(self, sheet: SheetConfig) -> None:
-        self.columns_var.set(sheet.columns_spec)
-        self.rows_var.set(sheet.rows_spec)
-        self.paste_var.set(sheet.paste_mode)
-        self.dest_file_var.set(sheet.destination.file_path)
-        self.dest_sheet_var.set(sheet.destination.sheet_name)
-        self.start_col_var.set(sheet.destination.start_col)
-        self.start_row_var.set(sheet.destination.start_row)
-
-    def _clear_editor(self) -> None:
-        self.columns_var.set("")
-        self.rows_var.set("")
-        self.paste_var.set("")
-        self.dest_file_var.set("")
-        self.dest_sheet_var.set("")
-        self.start_col_var.set("")
-        self.start_row_var.set("")
+    def _on_tree_select(self, event=None) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+        path = self._get_tree_path(sel[0])
+        if len(path) == 3:
+            self.current_sheet = self.project.sources[path[0]].recipes[path[1]].sheets[path[2]]
+        else:
+            self.current_sheet = None
 
     def _push_editor_to_sheet(self, *args) -> None:
-        if not self.current_sheet:
-            return
-        self.current_sheet.columns_spec = self.columns_var.get()
-        self.current_sheet.rows_spec = self.rows_var.get()
-        if self.paste_var.get():
-            self.current_sheet.paste_mode = self.paste_var.get()
-        self.current_sheet.destination.file_path = self.dest_file_var.get()
-        self.current_sheet.destination.sheet_name = self.dest_sheet_var.get()
-        self.current_sheet.destination.start_col = self.start_col_var.get()
-        self.current_sheet.destination.start_row = self.start_row_var.get()
-
-    # ---------------- Utility ----------------
-
-    def refresh_tree(self) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        for s_idx, source in enumerate(self.project.sources):
-            s_id = self.tree.insert("", "end", text=source.path)
-            for r_idx, recipe in enumerate(source.recipes):
-                r_id = self.tree.insert(s_id, "end", text=recipe.name)
-                for sh_idx, sheet in enumerate(recipe.sheets):
-                    self.tree.insert(r_id, "end", text=sheet.name)
+        if self.current_sheet:
+            self.current_sheet.columns_spec = self.columns_var.get()
 
 
 def main() -> None:

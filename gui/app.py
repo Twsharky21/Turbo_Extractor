@@ -1,4 +1,3 @@
-\
 from __future__ import annotations
 
 import os
@@ -79,12 +78,12 @@ class TurboExtractorApp(tk.Tk):
                 topbar.columnconfigure(i, weight=0)
             topbar.columnconfigure(7, weight=1)
 
-            ttk.Button(topbar, text="Add Source (XLSX/CSV)", command=self.add_sources).grid(row=0, column=0, padx=(0, 6))
-            ttk.Button(topbar, text="Remove Selected", command=self.remove_selected).grid(row=0, column=1, padx=(0, 6))
-            ttk.Button(topbar, text="Move Source Up", command=self.move_source_up).grid(row=0, column=2, padx=(0, 6))
-            ttk.Button(topbar, text="Move Source Down", command=self.move_source_down).grid(row=0, column=3, padx=(0, 6))
-            ttk.Button(topbar, text="Add Recipe", command=self.add_recipe).grid(row=0, column=4, padx=(0, 6))
-            ttk.Button(topbar, text="Add Sheet", command=self.add_sheet).grid(row=0, column=5, padx=(0, 6))
+            ttk.Button(topbar, text="Add Source (XLSX/CSV)", style="RunAccent.TButton", command=self.add_sources).grid(row=0, column=0, padx=(0, 6))
+            ttk.Button(topbar, text="Remove Selected", command=self.remove_selected).grid(row=0, column=5, padx=(0, 6))
+            ttk.Button(topbar, text="Move Source Up", command=self.move_source_up).grid(row=0, column=1, padx=(0, 6))
+            ttk.Button(topbar, text="Move Source Down", command=self.move_source_down).grid(row=0, column=2, padx=(0, 6))
+            ttk.Button(topbar, text="Add Recipe", command=self.add_recipe).grid(row=0, column=3, padx=(0, 6))
+            ttk.Button(topbar, text="Add Sheet", command=self.add_sheet).grid(row=0, column=4, padx=(0, 6))
 
             # ----- LEFT: TREE -----
             left = ttk.Frame(root)
@@ -319,8 +318,10 @@ class TurboExtractorApp(tk.Tk):
 
         for source in self.project.sources:
             s_id = self.tree.insert("", "end", text=source.path)
+            self.tree.item(s_id, open=True)
             for recipe in source.recipes:
                 r_id = self.tree.insert(s_id, "end", text=recipe.name)
+                self.tree.item(r_id, open=True)
                 for sheet in recipe.sheets:
                     self.tree.insert(r_id, "end", text=sheet.name)
 

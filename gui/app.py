@@ -46,9 +46,6 @@ class TurboExtractorApp(tk.Tk):
         # Editor loading guard: suppresses _push_editor_to_sheet while loading
         self._loading: bool = False
 
-        # Editor loading guard: suppresses _push_editor_to_sheet while loading
-        self._loading: bool = False
-
         # Autosave state
         self._autosave_dirty: bool = False
         self._autosave_after_id: Optional[str] = None
@@ -104,10 +101,6 @@ class TurboExtractorApp(tk.Tk):
             pass
 
     def _try_load_autosave(self) -> None:
-        # Only auto-load if TURBO_AUTOSAVE_PATH is explicitly set in the environment.
-        # This preserves test isolation: tests that need autoload set the env var via
-        # monkeypatch; tests that don't set it start with a clean project.
-        # Real-app usage: main() sets os.environ[ENV_AUTOSAVE_PATH] before launching.
         import os
         from core.autosave import ENV_AUTOSAVE_PATH
         if not os.environ.get(ENV_AUTOSAVE_PATH):
@@ -140,7 +133,6 @@ class TurboExtractorApp(tk.Tk):
             self.tree.delete(item)
 
         for source in self.project.sources:
-            # Display contract: show filename-ish label (not full path). Prefer source.name when present.
             label = self._source_label(source)
             s_id = self.tree.insert("", "end", text=label)
             self.tree.item(s_id, open=True)
@@ -150,7 +142,6 @@ class TurboExtractorApp(tk.Tk):
                 for sheet in recipe.sheets:
                     self.tree.insert(r_id, "end", text=sheet.name)
 
-        # Maintain editor visibility parity with selection.
         self._sync_right_panel_visibility()
 
     def _get_tree_path(self, item_id):
@@ -216,14 +207,14 @@ class TurboExtractorApp(tk.Tk):
                 is_sheet = False
             else:
                 is_sheet = (len(self._get_tree_path(sel[0])) == 3)
-        # selection_box is always visible (never removed).
-        # Ensure the top-level window is mapped so winfo_ismapped() returns 1.
         try:
             self.deiconify()
         except Exception:
             pass
         if is_sheet:
             try:
+                # Sheet selected: hide selection name box, show full editor
+                self.selection_box.grid_remove()
                 self.sheet_box.grid(row=1, column=0, sticky="ew")
                 self.rules_box.grid(row=2, column=0, sticky="nsew")
                 self.dest_box.grid(row=3, column=0, sticky="ew")
@@ -231,11 +222,14 @@ class TurboExtractorApp(tk.Tk):
                 pass
         else:
             try:
+                # Source/recipe selected: show selection name, hide sheet editor
+                self.selection_box.grid(row=0, column=0, sticky="ew")
                 self.sheet_box.grid_remove()
                 self.rules_box.grid_remove()
                 self.dest_box.grid_remove()
             except Exception:
                 pass
+
     def _on_tree_right_click(self, event) -> None:
         item = self.tree.identify_row(event.y)
         if not item:
@@ -315,7 +309,6 @@ class TurboExtractorApp(tk.Tk):
 
     def _ctx_reset_default(self) -> None:
         tpl.reset_default_template()
-
 
     # ---------------- Inline Rename (Recipe/Sheet) ----------------
 
@@ -428,11 +421,10 @@ class TurboExtractorApp(tk.Tk):
         sheet = self.project.sources[s].recipes[r].sheets[sh]
         sheet.name = new_name
         sheet.workbook_sheet = new_name
+
     # ---------------- Structure actions ----------------
 
-    
     def browse_destination(self) -> None:
-        # Choose destination XLSX (create or select). GUI only.
         path = filedialog.asksaveasfilename(
             title="Select destination XLSX",
             defaultextension=".xlsx",
@@ -454,7 +446,6 @@ class TurboExtractorApp(tk.Tk):
 
         for p in paths:
             src = SourceConfig(path=p, recipes=[])
-            # Ensure stable display name for tree/tests
             try:
                 if not getattr(src, "name", ""):
                     src.name = os.path.basename(p)
@@ -463,7 +454,8 @@ class TurboExtractorApp(tk.Tk):
             if default_template:
                 tpl.apply_template_to_source(src, default_template)
             else:
-                sheet = self._make_default_sheet(name="sheet1")
+                # FIX: "Sheet1" with capital S
+                sheet = self._make_default_sheet(name="Sheet1")
                 recipe = RecipeConfig(name="Recipe1", sheets=[sheet])
                 src.recipes = [recipe]
             self.project.sources.append(src)
@@ -511,10 +503,7 @@ class TurboExtractorApp(tk.Tk):
         self._select_source_by_path(moved_path)
         self._mark_dirty()
 
-
     def move_selected_up(self) -> None:
-        # Move selected node up within its parent (Source / Recipe / Sheet).
-        # Use tree.focus() as fallback: btn.invoke() can clear selection in headless Tk.
         sel = self.tree.selection()
         if not sel:
             focused = self.tree.focus()
@@ -554,8 +543,6 @@ class TurboExtractorApp(tk.Tk):
         self._mark_dirty()
 
     def move_selected_down(self) -> None:
-        # Move selected node down within its parent (Source / Recipe / Sheet).
-        # Use tree.focus() as fallback: btn.invoke() can clear selection in headless Tk.
         sel = self.tree.selection()
         if not sel:
             focused = self.tree.focus()
@@ -595,7 +582,6 @@ class TurboExtractorApp(tk.Tk):
         self._mark_dirty()
 
     def _reselect_after_move(self, key) -> None:
-        # Reselect the moved item after tree refresh.
         if not key:
             return
 
@@ -665,7 +651,6 @@ class TurboExtractorApp(tk.Tk):
         source = self.project.sources[path[0]]
         new_recipe = RecipeConfig(name=f"Recipe{len(source.recipes) + 1}", sheets=[])
         source.recipes.append(new_recipe)
-        # Insert into tree incrementally so pre-captured item IDs remain valid.
         src_children = self.tree.get_children("")
         s_id = src_children[path[0]]
         r_id = self.tree.insert(s_id, "end", text=new_recipe.name)
@@ -685,19 +670,16 @@ class TurboExtractorApp(tk.Tk):
 
         source = self.project.sources[path[0]]
 
-        # Source selected: add under first recipe (create if missing)
         if len(path) == 1:
             if not source.recipes:
                 source.recipes.append(RecipeConfig(name="Recipe1", sheets=[]))
             recipe = source.recipes[0]
         else:
-            # Recipe selected or Sheet selected -> parent recipe
             recipe = source.recipes[path[1]]
 
-        # Name contract: all new sheets are "sheet1" and duplicates are allowed.
-        new_sheet = self._make_default_sheet(name="sheet1")
+        # FIX: "Sheet1" with capital S
+        new_sheet = self._make_default_sheet(name="Sheet1")
         recipe.sheets.append(new_sheet)
-        # Insert into tree incrementally so pre-captured item IDs remain valid.
         src_children = self.tree.get_children("")
         s_id = src_children[path[0]]
         recipe_idx = path[1] if len(path) >= 2 else 0
@@ -733,12 +715,59 @@ class TurboExtractorApp(tk.Tk):
         self._clear_editor()
         self._mark_dirty()
 
+        # FIX: reselect the nearest surviving node so the panel stays populated
+        self._reselect_after_remove(path)
+
+    def _reselect_after_remove(self, removed_path: list[int]) -> None:
+        """After remove + tree refresh, select the nearest surviving node."""
+        src_ids = list(self.tree.get_children(""))
+        if not src_ids:
+            return  # tree is empty, nothing to select
+
+        depth = len(removed_path)
+
+        if depth == 1:
+            # A source was removed — pick nearest remaining source
+            idx = min(removed_path[0], len(src_ids) - 1)
+            target = src_ids[idx]
+
+        elif depth == 2:
+            # A recipe was removed — pick nearest recipe or fall back to parent source
+            s_idx = min(removed_path[0], len(src_ids) - 1)
+            s_id = src_ids[s_idx]
+            recipe_ids = list(self.tree.get_children(s_id))
+            if recipe_ids:
+                r_idx = min(removed_path[1], len(recipe_ids) - 1)
+                target = recipe_ids[r_idx]
+            else:
+                target = s_id
+
+        elif depth == 3:
+            # A sheet was removed — pick nearest sheet, or recipe, or source
+            s_idx = min(removed_path[0], len(src_ids) - 1)
+            s_id = src_ids[s_idx]
+            recipe_ids = list(self.tree.get_children(s_id))
+            if not recipe_ids:
+                target = s_id
+            else:
+                r_idx = min(removed_path[1], len(recipe_ids) - 1)
+                r_id = recipe_ids[r_idx]
+                sheet_ids = list(self.tree.get_children(r_id))
+                if sheet_ids:
+                    sh_idx = min(removed_path[2], len(sheet_ids) - 1)
+                    target = sheet_ids[sh_idx]
+                else:
+                    target = r_id
+        else:
+            return
+
+        self.tree.selection_set(target)
+        self.tree.see(target)
+        self._on_tree_select()
+
     # ---------------- Run wiring ----------------
 
-
     def _feedback_clear(self) -> None:
-        # GUI-only feedback. In the monolith-like layout we primarily use the popup summary.
-        # Keep these helpers as no-ops / minimal status updates for backward compatibility.
         if hasattr(self, "status_var"):
             self.status_var.set("Running...")
 
@@ -747,11 +776,9 @@ class TurboExtractorApp(tk.Tk):
         return f"{base} | {recipe_name} / {sheet_name}"
 
     def _feedback_set_row(self, key: str, status: str, rows: str, message: str) -> None:
-        # If a feedback tree is present (older layout), update it. Otherwise ignore.
         tree = getattr(self, "feedback_tree", None)
         if tree is None:
             return
-        # Find existing row by key
         existing = None
         for item in tree.get_children():
             if tree.item(item, "text") == key:
@@ -764,23 +791,18 @@ class TurboExtractorApp(tk.Tk):
 
     def _feedback_progress_callback(self, event, payload=None, *args) -> None:
         """Progress hook used by RUN ALL + local RUN, tolerant of legacy call shapes."""
-        # Supported call forms:
-        # 1) callback(progress_item)
-        # 2) callback(event, payload)
         try:
             progress_item = event if payload is None and hasattr(event, 'source_path') else payload
             if progress_item is None:
                 return
             key = self._feedback_key(progress_item.source_path, progress_item.recipe_name, progress_item.sheet_name)
             status = getattr(progress_item, 'status', None) or getattr(progress_item, 'message', '') or ''
-            rows_written = getattr(progress_item, 'rows_written', None)
-            if rows_written is None:
-                rows_written = getattr(progress_item, 'rows_written', None)
             rows = '' if getattr(progress_item, 'rows_written', None) is None else str(getattr(progress_item, 'rows_written'))
             msg = getattr(progress_item, 'message', '') or ''
             self._feedback_set_row(key, str(status), rows, msg)
         except Exception:
             return
+
     def _format_run_report(self, report) -> str:
         lines = []
         for r in report.results:
@@ -794,15 +816,10 @@ class TurboExtractorApp(tk.Tk):
     def run_all(self) -> None:
         items = self.project.build_run_items()
         self._feedback_clear()
-        # Backwards-compatible call:
-        # - Newer core.engine.run_all may accept an on_progress callback.
-        # - Tests (and older implementations) may monkeypatch run_all with a
-        #   signature that does NOT accept extra kwargs.
         try:
             report = engine_run_all(items, on_progress=self._feedback_progress_callback)
         except TypeError:
             report = engine_run_all(items)
-            # Populate feedback panel from the final report (best-effort).
             try:
                 for r in getattr(report, "results", []) or []:
                     self._feedback_progress_callback("result", r)
@@ -818,14 +835,10 @@ class TurboExtractorApp(tk.Tk):
         self._feedback_clear()
         try:
             res = engine_run_sheet(self.current_source_path, self.current_sheet, recipe_name=self.current_recipe_name)
-            self._feedback_progress_callback(
-                "result",
-                res,
-            )
+            self._feedback_progress_callback("result", res)
             messagebox.showinfo("Run complete", f"{res.recipe_name} / {res.sheet_name}: {res.rows_written} rows")
         except AppError as e:
             from core.models import SheetResult
-
             err_res = SheetResult(
                 source_path=self.current_source_path,
                 recipe_name=self.current_recipe_name,
@@ -841,16 +854,7 @@ class TurboExtractorApp(tk.Tk):
             self._feedback_progress_callback("error", err_res)
             messagebox.showerror("Run failed", f"{e.code}: {e.message}")
 
-    # -----------------------------
-    # Scrollable report dialog
-    # -----------------------------
-
     def _show_scrollable_report_dialog(self, title: str, text: str) -> None:
-        """Show a single centered, scrollable summary dialog.
-
-        The RUN ALL summary can be long; messagebox cannot scroll.
-        """
-        # Ensure only one report window exists at a time.
         if getattr(self, "_report_dialog", None) is not None:
             try:
                 self._report_dialog.destroy()
@@ -885,7 +889,6 @@ class TurboExtractorApp(tk.Tk):
         txt.insert("1.0", text or "")
         txt.configure(state="disabled")
 
-        # Center on screen
         win.update_idletasks()
         w = win.winfo_width()
         h = win.winfo_height()
@@ -956,11 +959,8 @@ class TurboExtractorApp(tk.Tk):
             child.destroy()
 
     def _push_editor_to_sheet(self, *args) -> None:
-        # Suppressed while _load_sheet_into_editor is running.
         if self._loading:
             return
-        # Always write into the currently selected sheet (guards against stale current_sheet pointers
-        # during headless tests / event-order differences).
         sel = self.tree.selection()
         if not sel:
             return
@@ -980,7 +980,6 @@ class TurboExtractorApp(tk.Tk):
             elif val.lower().startswith("keep"):
                 sheet.paste_mode = "keep"
             else:
-                # Backwards compatibility (older UI stored raw values)
                 sheet.paste_mode = val
         if self.combine_var.get():
             sheet.rules_combine = self.combine_var.get()
@@ -1038,18 +1037,30 @@ class TurboExtractorApp(tk.Tk):
         row = ttk.Frame(self.rules_frame)
         row.grid(row=idx, column=0, sticky="ew", pady=2)
         row.columnconfigure(3, weight=1)
+        # Ensure the rule row itself fills the rules_frame width
+        self.rules_frame.columnconfigure(0, weight=1)
 
         mode_var = tk.StringVar(value=rule.mode)
         col_var = tk.StringVar(value=rule.column)
         op_var = tk.StringVar(value=rule.operator)
         val_var = tk.StringVar(value=rule.value)
 
-        ttk.Combobox(row, textvariable=mode_var, values=["include", "exclude"], state="readonly", width=9).grid(row=0, column=0)
-        ttk.Entry(row, textvariable=col_var, width=6).grid(row=0, column=1, padx=(6, 0))
-        ttk.Combobox(row, textvariable=op_var, values=["equals", "contains", "<", ">"], state="readonly", width=10).grid(row=0, column=2, padx=(6, 0))
+        # White dropdowns; mode wider (13) to align with "Include/Exclude" header
+        ttk.Combobox(row, textvariable=mode_var, values=["include", "exclude"], state="readonly", style="White.TCombobox", width=13).grid(row=0, column=0)
+        col_entry = ttk.Entry(row, textvariable=col_var, width=6)
+        col_entry.grid(row=0, column=1, padx=(6, 0))
+        ttk.Combobox(row, textvariable=op_var, values=["equals", "contains", "<", ">"], state="readonly", style="White.TCombobox", width=10).grid(row=0, column=2, padx=(6, 0))
         ttk.Entry(row, textvariable=val_var).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
         ttk.Button(row, text="X", command=lambda i=idx: self._remove_rule(i), width=3).grid(row=0, column=4, padx=(6, 0))
+
+        # Auto-capitalize column entry
+        def _capitalize_col(*_):
+            v = col_var.get()
+            up = v.upper()
+            if v != up:
+                col_var.set(up)
+        col_var.trace_add("write", _capitalize_col)
 
         def push(*_):
             rule.mode = mode_var.get()
@@ -1065,7 +1076,6 @@ class TurboExtractorApp(tk.Tk):
 
 
 def main() -> None:
-    # Ensure autosave path is set so _try_load_autosave activates in real usage.
     import os
     from core.autosave import ENV_AUTOSAVE_PATH, resolve_autosave_path
     if not os.environ.get(ENV_AUTOSAVE_PATH):

@@ -55,6 +55,12 @@ def _invoke(a: tk.Misc, text: str) -> None:
     btn.invoke()
 
 
+def _is_in_grid(widget) -> bool:
+    """Return True if widget is currently placed in grid (not removed)."""
+    info = widget.grid_info()
+    return bool(info)
+
+
 # ---- Button layout ----
 
 def test_add_source_and_run_share_accent_style():
@@ -87,7 +93,6 @@ def test_run_buttons_order_run_all_left_run_right():
         btn_all = _find_button(gui, "RUN ALL")
         btn_run = _find_button(gui, "RUN")
         assert btn_all is not None and btn_run is not None
-        # Both are packed side=left; RUN ALL should have a lower x position
         gui.update_idletasks()
         assert btn_all.winfo_x() < btn_run.winfo_x()
     finally:
@@ -124,26 +129,39 @@ def test_right_panel_source_recipe_shows_selection_hides_editor():
             recipes=[RecipeConfig(name="Recipe1",
                                   sheets=[SheetConfig(name="S1", workbook_sheet="S1")])],
         ))
-        gui.refresh_tree(); gui.update_idletasks()
+        gui.refresh_tree()
+        gui.update_idletasks()
 
         src_id = gui.tree.get_children()[0]
         rec_id = _child(gui.tree, src_id, "Recipe1")
         sh_id  = _child(gui.tree, rec_id, "S1")
 
-        _select(gui.tree, src_id); gui._on_tree_select()
-        assert gui.selection_box.winfo_ismapped()
-        assert not gui.sheet_box.winfo_ismapped()
+        # Source selected — selection_box in grid, editor panels removed
+        _select(gui.tree, src_id)
+        gui._on_tree_select()
+        gui.update_idletasks()
+        assert _is_in_grid(gui.selection_box)
+        assert not _is_in_grid(gui.sheet_box)
+        assert not _is_in_grid(gui.rules_box)
+        assert not _is_in_grid(gui.dest_box)
 
-        _select(gui.tree, rec_id); gui._on_tree_select()
-        assert gui.selection_box.winfo_ismapped()
-        assert not gui.sheet_box.winfo_ismapped()
+        # Recipe selected — same
+        _select(gui.tree, rec_id)
+        gui._on_tree_select()
+        gui.update_idletasks()
+        assert _is_in_grid(gui.selection_box)
+        assert not _is_in_grid(gui.sheet_box)
+        assert not _is_in_grid(gui.rules_box)
+        assert not _is_in_grid(gui.dest_box)
 
-        _select(gui.tree, sh_id); gui._on_tree_select()
-        assert gui.sheet_box.winfo_ismapped()
-        assert gui.rules_box.winfo_ismapped()
-        assert gui.dest_box.winfo_ismapped()
-        # selection box should be hidden when sheet is active
-        assert not gui.selection_box.winfo_ismapped()
+        # Sheet selected — editor shown, selection_box removed
+        _select(gui.tree, sh_id)
+        gui._on_tree_select()
+        gui.update_idletasks()
+        assert not _is_in_grid(gui.selection_box)
+        assert _is_in_grid(gui.sheet_box)
+        assert _is_in_grid(gui.rules_box)
+        assert _is_in_grid(gui.dest_box)
     finally:
         gui.destroy()
 

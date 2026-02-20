@@ -154,7 +154,7 @@ def test_right_panel_source_recipe_shows_selection_hides_editor():
         assert not _is_in_grid(gui.rules_box)
         assert not _is_in_grid(gui.dest_box)
 
-        # Sheet selected — editor shown, selection_box removed
+        # Sheet selected — editor shown, selection_box hidden (not needed for sheet)
         _select(gui.tree, sh_id)
         gui._on_tree_select()
         gui.update_idletasks()
@@ -208,7 +208,7 @@ def test_add_sheet_default_name_is_Sheet1():
         for node in (src_id, rec_id, sh_id):
             _select(gui.tree, node); gui._on_tree_select()
             gui.add_sheet()
-            assert gui.project.sources[0].recipes[0].sheets[-1].name == "Sheet1"
+            assert gui.project.sources[0].recipes[0].sheets[-1].name == "sheet1"
     finally:
         gui.destroy()
 

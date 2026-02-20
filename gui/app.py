@@ -18,13 +18,6 @@ from core.autosave import resolve_autosave_path, save_project_atomic, load_proje
 class TurboExtractorApp(tk.Tk):
     """
     V3 GUI (merged): Tree structure + minimal sheet editor + rules UI.
-
-    Goals:
-    - Keep ProjectConfig as the single source of truth.
-    - Tree reflects Sources -> Recipes -> Sheets.
-    - Selecting a Sheet loads editor; selecting Source/Recipe clears editor.
-    - Add/Remove structure implemented.
-    - Rules UI supports add/remove + live binding.
     """
 
     def __init__(self) -> None:
@@ -37,33 +30,22 @@ class TurboExtractorApp(tk.Tk):
         self.current_source_path: Optional[str] = None
         self.current_recipe_name: Optional[str] = None
 
-        # Inline rename state
         self._rename_entry: Optional[ttk.Entry] = None
         self._rename_item_id: Optional[str] = None
         self._rename_path: Optional[list[int]] = None
-        self._rename_kind: Optional[str] = None  # 'recipe' | 'sheet'
+        self._rename_kind: Optional[str] = None
 
-        # Editor loading guard: suppresses _push_editor_to_sheet while loading
         self._loading: bool = False
 
-        # Autosave state
         self._autosave_dirty: bool = False
         self._autosave_after_id: Optional[str] = None
         self._autosave_periodic_id: Optional[str] = None
         self._autosave_path: str = resolve_autosave_path()
 
         self._build_ui()
-
-        # Load autosave (if present) AFTER UI exists, then refresh.
         self._try_load_autosave()
-
-        # Periodic safety save
         self._schedule_periodic_autosave()
-
-        # Ensure save on close
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    # ---------------- UI ----------------
 
     def _build_ui(self) -> None:
         build_ui(self)
@@ -78,11 +60,9 @@ class TurboExtractorApp(tk.Tk):
                 self.after_cancel(self._autosave_after_id)
             except Exception:
                 pass
-        # Debounce ~1.2s
         self._autosave_after_id = self.after(1200, self._autosave_now)
 
     def _schedule_periodic_autosave(self) -> None:
-        # ~45s safety save
         self._autosave_periodic_id = self.after(45000, self._periodic_autosave_tick)
 
     def _periodic_autosave_tick(self) -> None:
@@ -97,7 +77,6 @@ class TurboExtractorApp(tk.Tk):
             save_project_atomic(self.project, self._autosave_path)
             self._autosave_dirty = False
         except Exception:
-            # Autosave should never crash the app.
             pass
 
     def _try_load_autosave(self) -> None:
@@ -119,8 +98,6 @@ class TurboExtractorApp(tk.Tk):
             self._autosave_now()
         finally:
             self.destroy()
-
-    # ---------------- Tree helpers ----------------
 
     def _source_label(self, src: SourceConfig) -> str:
         name = getattr(src, "name", "")
@@ -154,8 +131,6 @@ class TurboExtractorApp(tk.Tk):
             current = parent
         return path
 
-    # ---------------- Selection ----------------
-
     def _on_tree_select(self, event=None) -> None:
         sel = self.tree.selection()
         if not sel:
@@ -171,7 +146,6 @@ class TurboExtractorApp(tk.Tk):
             self._load_sheet_into_editor(self.current_sheet)
             return
 
-        # Source selection
         if len(path) == 1:
             src = self.project.sources[path[0]]
             self.selection_name_var.set(self._source_label(src))
@@ -182,7 +156,6 @@ class TurboExtractorApp(tk.Tk):
             self._clear_editor()
             return
 
-        # Recipe selection
         if len(path) == 2:
             recipe = self.project.sources[path[0]].recipes[path[1]]
             self.selection_name_var.set(recipe.name)
@@ -200,7 +173,6 @@ class TurboExtractorApp(tk.Tk):
         self._clear_editor()
 
     def _sync_right_panel_visibility(self, is_sheet: Optional[bool] = None) -> None:
-        """Show full editor only for Sheet selection; otherwise show name-only."""
         if is_sheet is None:
             sel = self.tree.selection()
             if not sel:
@@ -213,7 +185,7 @@ class TurboExtractorApp(tk.Tk):
             pass
         if is_sheet:
             try:
-                # Sheet selected: hide selection name box, show full editor
+                # Sheet: hide the name-only header, show full editor
                 self.selection_box.grid_remove()
                 self.sheet_box.grid(row=1, column=0, sticky="ew")
                 self.rules_box.grid(row=2, column=0, sticky="nsew")
@@ -222,7 +194,7 @@ class TurboExtractorApp(tk.Tk):
                 pass
         else:
             try:
-                # Source/recipe selected: show selection name, hide sheet editor
+                # Source/Recipe: show name-only header, hide editor panels
                 self.selection_box.grid(row=0, column=0, sticky="ew")
                 self.sheet_box.grid_remove()
                 self.rules_box.grid_remove()
@@ -237,7 +209,6 @@ class TurboExtractorApp(tk.Tk):
         self.tree.selection_set(item)
         path = self._get_tree_path(item)
 
-        # Source
         if len(path) == 1:
             self._ctx_source_index = path[0]
             try:
@@ -246,7 +217,6 @@ class TurboExtractorApp(tk.Tk):
                 self._source_menu.grab_release()
             return
 
-        # Recipe
         if len(path) == 2:
             self._ctx_recipe_path = path
             try:
@@ -255,7 +225,6 @@ class TurboExtractorApp(tk.Tk):
                 self._recipe_menu.grab_release()
             return
 
-        # Sheet
         if len(path) == 3:
             self._ctx_sheet_path = path
             try:
@@ -263,8 +232,6 @@ class TurboExtractorApp(tk.Tk):
             finally:
                 self._sheet_menu.grab_release()
             return
-
-    # ---------------- Templates / Default (Source context menu) ----------------
 
     def _get_ctx_source(self) -> Optional[SourceConfig]:
         if self._ctx_source_index is None:
@@ -309,8 +276,6 @@ class TurboExtractorApp(tk.Tk):
 
     def _ctx_reset_default(self) -> None:
         tpl.reset_default_template()
-
-    # ---------------- Inline Rename (Recipe/Sheet) ----------------
 
     def _ctx_rename_recipe(self) -> None:
         if not self._ctx_recipe_path:
@@ -422,8 +387,6 @@ class TurboExtractorApp(tk.Tk):
         sheet.name = new_name
         sheet.workbook_sheet = new_name
 
-    # ---------------- Structure actions ----------------
-
     def browse_destination(self) -> None:
         path = filedialog.asksaveasfilename(
             title="Select destination XLSX",
@@ -454,8 +417,7 @@ class TurboExtractorApp(tk.Tk):
             if default_template:
                 tpl.apply_template_to_source(src, default_template)
             else:
-                # FIX: "Sheet1" with capital S
-                sheet = self._make_default_sheet(name="Sheet1")
+                sheet = self._make_default_sheet(name="sheet1")
                 recipe = RecipeConfig(name="Recipe1", sheets=[sheet])
                 src.recipes = [recipe]
             self.project.sources.append(src)
@@ -670,23 +632,34 @@ class TurboExtractorApp(tk.Tk):
 
         source = self.project.sources[path[0]]
 
+        # Source selected: add under first recipe (create if missing)
+        auto_created_recipe = False
         if len(path) == 1:
             if not source.recipes:
                 source.recipes.append(RecipeConfig(name="Recipe1", sheets=[]))
+                auto_created_recipe = True
             recipe = source.recipes[0]
         else:
+            # Recipe selected or Sheet selected -> parent recipe
             recipe = source.recipes[path[1]]
 
-        # FIX: "Sheet1" with capital S
-        new_sheet = self._make_default_sheet(name="Sheet1")
+        # Name contract: all new sheets are "sheet1" and duplicates are allowed.
+        new_sheet = self._make_default_sheet(name="sheet1")
         recipe.sheets.append(new_sheet)
-        src_children = self.tree.get_children("")
-        s_id = src_children[path[0]]
-        recipe_idx = path[1] if len(path) >= 2 else 0
-        r_children = self.tree.get_children(s_id)
-        r_id = r_children[recipe_idx]
-        self.tree.insert(r_id, "end", text=new_sheet.name)
-        self.tree.item(r_id, open=True)
+
+        if auto_created_recipe:
+            # Recipe node didn't exist in tree yet — full refresh required.
+            # Incremental insert would fail: r_children would be empty tuple.
+            self.refresh_tree()
+        else:
+            # Incremental insert keeps pre-captured item IDs valid.
+            src_children = self.tree.get_children("")
+            s_id = src_children[path[0]]
+            recipe_idx = path[1] if len(path) >= 2 else 0
+            r_children = self.tree.get_children(s_id)
+            r_id = r_children[recipe_idx]
+            self.tree.insert(r_id, "end", text=new_sheet.name)
+            self.tree.item(r_id, open=True)
         self._mark_dirty()
 
     def remove_selected(self) -> None:
@@ -704,7 +677,6 @@ class TurboExtractorApp(tk.Tk):
             source = self.project.sources[path[0]]
             recipe = source.recipes[path[1]]
             del recipe.sheets[path[2]]
-            # auto-delete empty recipe
             if not recipe.sheets:
                 del source.recipes[path[1]]
 
@@ -714,58 +686,54 @@ class TurboExtractorApp(tk.Tk):
         self.refresh_tree()
         self._clear_editor()
         self._mark_dirty()
-
-        # FIX: reselect the nearest surviving node so the panel stays populated
         self._reselect_after_remove(path)
 
-    def _reselect_after_remove(self, removed_path: list[int]) -> None:
-        """After remove + tree refresh, select the nearest surviving node."""
-        src_ids = list(self.tree.get_children(""))
-        if not src_ids:
-            return  # tree is empty, nothing to select
-
+    def _reselect_after_remove(self, removed_path: list) -> None:
+        """After deletion, select the nearest sibling or parent that still exists."""
         depth = len(removed_path)
+        removed_idx = removed_path[-1]
 
         if depth == 1:
-            # A source was removed — pick nearest remaining source
-            idx = min(removed_path[0], len(src_ids) - 1)
-            target = src_ids[idx]
+            roots = self.tree.get_children("")
+            if not roots:
+                return
+            target_idx = min(removed_idx, len(roots) - 1)
+            item = roots[target_idx]
 
         elif depth == 2:
-            # A recipe was removed — pick nearest recipe or fall back to parent source
-            s_idx = min(removed_path[0], len(src_ids) - 1)
-            s_id = src_ids[s_idx]
-            recipe_ids = list(self.tree.get_children(s_id))
-            if recipe_ids:
-                r_idx = min(removed_path[1], len(recipe_ids) - 1)
-                target = recipe_ids[r_idx]
+            roots = self.tree.get_children("")
+            if removed_path[0] >= len(roots):
+                return
+            s_id = roots[removed_path[0]]
+            recipes = self.tree.get_children(s_id)
+            if recipes:
+                target_idx = min(removed_idx, len(recipes) - 1)
+                item = recipes[target_idx]
             else:
-                target = s_id
+                item = s_id
 
         elif depth == 3:
-            # A sheet was removed — pick nearest sheet, or recipe, or source
-            s_idx = min(removed_path[0], len(src_ids) - 1)
-            s_id = src_ids[s_idx]
-            recipe_ids = list(self.tree.get_children(s_id))
-            if not recipe_ids:
-                target = s_id
+            roots = self.tree.get_children("")
+            if removed_path[0] >= len(roots):
+                return
+            s_id = roots[removed_path[0]]
+            recipes = self.tree.get_children(s_id)
+            if removed_path[1] >= len(recipes):
+                item = s_id
             else:
-                r_idx = min(removed_path[1], len(recipe_ids) - 1)
-                r_id = recipe_ids[r_idx]
-                sheet_ids = list(self.tree.get_children(r_id))
-                if sheet_ids:
-                    sh_idx = min(removed_path[2], len(sheet_ids) - 1)
-                    target = sheet_ids[sh_idx]
+                r_id = recipes[removed_path[1]]
+                sheets = self.tree.get_children(r_id)
+                if sheets:
+                    target_idx = min(removed_idx, len(sheets) - 1)
+                    item = sheets[target_idx]
                 else:
-                    target = r_id
+                    item = r_id
         else:
             return
 
-        self.tree.selection_set(target)
-        self.tree.see(target)
+        self.tree.selection_set(item)
+        self.tree.see(item)
         self._on_tree_select()
-
-    # ---------------- Run wiring ----------------
 
     def _feedback_clear(self) -> None:
         if hasattr(self, "status_var"):
@@ -790,7 +758,6 @@ class TurboExtractorApp(tk.Tk):
             tree.item(existing, values=(status, rows, message))
 
     def _feedback_progress_callback(self, event, payload=None, *args) -> None:
-        """Progress hook used by RUN ALL + local RUN, tolerant of legacy call shapes."""
         try:
             progress_item = event if payload is None and hasattr(event, 'source_path') else payload
             if progress_item is None:
@@ -921,8 +888,6 @@ class TurboExtractorApp(tk.Tk):
             ),
         )
 
-    # ---------------- Editor binding ----------------
-
     def _load_sheet_into_editor(self, sheet: SheetConfig) -> None:
         self._loading = True
         try:
@@ -991,8 +956,6 @@ class TurboExtractorApp(tk.Tk):
 
         self._mark_dirty()
 
-    # ---------------- Rules UI ----------------
-
     def add_rule(self) -> None:
         sel = self.tree.selection()
         if not sel:
@@ -1037,30 +1000,18 @@ class TurboExtractorApp(tk.Tk):
         row = ttk.Frame(self.rules_frame)
         row.grid(row=idx, column=0, sticky="ew", pady=2)
         row.columnconfigure(3, weight=1)
-        # Ensure the rule row itself fills the rules_frame width
-        self.rules_frame.columnconfigure(0, weight=1)
 
         mode_var = tk.StringVar(value=rule.mode)
         col_var = tk.StringVar(value=rule.column)
         op_var = tk.StringVar(value=rule.operator)
         val_var = tk.StringVar(value=rule.value)
 
-        # White dropdowns; mode wider (13) to align with "Include/Exclude" header
-        ttk.Combobox(row, textvariable=mode_var, values=["include", "exclude"], state="readonly", style="White.TCombobox", width=13).grid(row=0, column=0)
-        col_entry = ttk.Entry(row, textvariable=col_var, width=6)
-        col_entry.grid(row=0, column=1, padx=(6, 0))
-        ttk.Combobox(row, textvariable=op_var, values=["equals", "contains", "<", ">"], state="readonly", style="White.TCombobox", width=10).grid(row=0, column=2, padx=(6, 0))
+        ttk.Combobox(row, textvariable=mode_var, values=["include", "exclude"], state="readonly", width=9).grid(row=0, column=0)
+        ttk.Entry(row, textvariable=col_var, width=6).grid(row=0, column=1, padx=(6, 0))
+        ttk.Combobox(row, textvariable=op_var, values=["equals", "contains", "<", ">"], state="readonly", width=10).grid(row=0, column=2, padx=(6, 0))
         ttk.Entry(row, textvariable=val_var).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
         ttk.Button(row, text="X", command=lambda i=idx: self._remove_rule(i), width=3).grid(row=0, column=4, padx=(6, 0))
-
-        # Auto-capitalize column entry
-        def _capitalize_col(*_):
-            v = col_var.get()
-            up = v.upper()
-            if v != up:
-                col_var.set(up)
-        col_var.trace_add("write", _capitalize_col)
 
         def push(*_):
             rule.mode = mode_var.get()

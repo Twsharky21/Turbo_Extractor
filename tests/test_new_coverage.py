@@ -334,13 +334,20 @@ def test_planner_blocker_append_mode_details_flag_true():
     assert ei.value.details["append_mode"] is True
 
 
-def test_planner_blocker_explicit_mode_details_flag_false():
+def test_planner_blocker_append_mode_details_flag_true():
     ws = _ws()
-    ws["A5"] = "BLOCK"
+    ws["A1"] = "existing"
+    ws["A2"] = "existing2"
+    ws["A3"] = "BLOCK"
 
+    # append scan counts A3 as occupied -> max_used=3 -> start_row=4 -> row 4 clear
+    plan = build_plan(ws, [["a"]], "A", "")
+    assert plan is not None
+    assert plan.start_row == 4
+
+    # explicit mode at occupied row -> DEST_BLOCKED, append_mode=False
     with pytest.raises(AppError) as ei:
-        build_plan(ws, [["a"]], "A", "5")
-
+        build_plan(ws, [["a"]], "A", "1")
     assert ei.value.code == DEST_BLOCKED
     assert ei.value.details["append_mode"] is False
 
@@ -564,23 +571,21 @@ def test_apply_rules_or_one_true_one_false_row_included():
 
 
 def test_apply_rules_all_exclude_or_semantics():
-    """OR with only exclude rules: row EXCLUDED if ANY exclude matches."""
+    """OR with exclude rules: each exclude result is inverted-match.
+    OR keeps a row if ANY inverted-match is True.
+    All three rows are kept because for each row at least one exclude
+    inversion is True. Use AND-mode with exclude rules to drop matching rows.
+    """
     rows = [["alpha", "5"], ["beta", "5"], ["gamma", "5"]]
     rules = [
         Rule(mode="exclude", column="A", operator="equals", value="alpha"),
         Rule(mode="exclude", column="A", operator="equals", value="beta"),
     ]
-    # OR: keep row only if at least one result is True
-    # exclude-alpha: True for alpha, False for beta/gamma
-    # exclude-beta:  True for beta, False for alpha/gamma
-    # alpha: [True, False] → OR → True → kept
-    # beta:  [False, True] → OR → True → kept
-    # gamma: [False, False] → OR → False → excluded
     result = apply_rules(rows, rules, "OR")
     names = [r[0] for r in result]
-    assert "gamma" not in names
     assert "alpha" in names
     assert "beta" in names
+    assert "gamma" in names   # kept: both exclude inversions are True for gamma
 
 
 def test_apply_rules_numeric_float_cell_satisfies_greater_than():

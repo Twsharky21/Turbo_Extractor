@@ -1,7 +1,6 @@
-\
 from __future__ import annotations
 
-from typing import List, Any, Iterable, Tuple, Callable, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import os
 
 from openpyxl import Workbook, load_workbook
@@ -17,11 +16,7 @@ from .writer import apply_write_plan
 
 
 def _apply_source_start_row(table: List[List[Any]], source_start_row: str) -> List[List[Any]]:
-    """Apply a 1-based source start row offset.
-
-    Blank means no offset.
-    Row numbers in rows_spec are interpreted relative to the trimmed table.
-    """
+    """Apply a 1-based source start row offset. Blank means no offset."""
     s = (source_start_row or "").strip()
     if not s:
         return table
@@ -68,9 +63,21 @@ def _get_or_create_sheet(wb: Workbook, name: str):
     return ws
 
 
-def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Recipe") -> SheetResult:
-    table = _load_source_table(source_path, sheet_cfg.workbook_sheet)
+def run_sheet(
+    source_path: str,
+    sheet_cfg: SheetConfig,
+    recipe_name: str = "Recipe",
+    _wb_cache: Optional[Dict[str, Workbook]] = None,
+) -> SheetResult:
+    """
+    Execute a single sheet extraction.
 
+    _wb_cache: optional dict keyed by dest_path holding in-memory Workbook objects.
+               When provided (by run_all), the workbook is NOT saved to disk here —
+               run_all manages saves after each item. When None (standalone call),
+               open, write, and save here.
+    """
+    table = _load_source_table(source_path, sheet_cfg.workbook_sheet)
     table = _apply_source_start_row(table, getattr(sheet_cfg, "source_start_row", ""))
 
     used_h, used_w = compute_used_range(table)
@@ -81,7 +88,6 @@ def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Reci
         row_indices = list(range(used_h))
 
     table_rows = apply_row_selection(table, row_indices)
-
     table_rows = apply_rules(table_rows, sheet_cfg.rules, sheet_cfg.rules_combine)
 
     col_indices = parse_columns(sheet_cfg.columns_spec)
@@ -96,7 +102,15 @@ def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Reci
         shaped = shape_pack(selected)
 
     dest_path = sheet_cfg.destination.file_path
-    wb = _open_or_create_dest(dest_path)
+    standalone = _wb_cache is None
+
+    if standalone:
+        wb = _open_or_create_dest(dest_path)
+    else:
+        if dest_path not in _wb_cache:
+            _wb_cache[dest_path] = _open_or_create_dest(dest_path)
+        wb = _wb_cache[dest_path]
+
     ws = _get_or_create_sheet(wb, sheet_cfg.destination.sheet_name)
 
     plan = build_plan(ws, shaped, sheet_cfg.destination.start_col, sheet_cfg.destination.start_row)
@@ -104,7 +118,7 @@ def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Reci
     if plan is not None:
         rows_written = apply_write_plan(ws, shaped, plan)
 
-    if dest_path:
+    if standalone and dest_path:
         wb.save(dest_path)
 
     return SheetResult(
@@ -119,87 +133,91 @@ def run_sheet(source_path: str, sheet_cfg: SheetConfig, recipe_name: str = "Reci
 
 
 RunItem = Tuple[str, str, SheetConfig]
-"""
-(source_path, recipe_name, sheet_cfg)
-"""
+"""(source_path, recipe_name, sheet_cfg)"""
 
 
 def run_all(
     items: Iterable[RunItem],
     on_progress: Optional[Callable[[str, Any], None]] = None,
 ) -> RunReport:
+    """
+    Execute all items in tree order using a shared in-memory workbook cache
+    per dest file. This ensures successive runs to the same destination see
+    each other's writes immediately without disk round-trips causing stale
+    append-row calculations.
+
+    Each workbook is saved to disk after every successful item for crash safety.
+    Fail-fast on first error: remaining items are not executed.
+    """
     results: List[SheetResult] = []
     ok = True
+    wb_cache: Dict[str, Workbook] = {}
 
-    for (source_path, recipe_name, sheet_cfg) in items:
+    def _emit(event: str, payload: Any) -> None:
         if on_progress is not None:
             try:
-                on_progress(
-                    "start",
-                    {
-                        "source_path": source_path,
-                        "recipe_name": recipe_name,
-                        "sheet_name": sheet_cfg.name,
-                    },
-                )
+                on_progress(event, payload)
             except Exception:
-                # Progress reporting must never break execution.
-                pass
+                pass  # Progress callbacks must never break execution.
+
+    for (source_path, recipe_name, sheet_cfg) in items:
+        _emit("start", {
+            "source_path": source_path,
+            "recipe_name": recipe_name,
+            "sheet_name": sheet_cfg.name,
+        })
+
         try:
-            res = run_sheet(source_path, sheet_cfg, recipe_name=recipe_name)
-            results.append(res)
-            if on_progress is not None:
-                try:
-                    on_progress("result", res)
-                except Exception:
-                    pass
+            result = run_sheet(source_path, sheet_cfg, recipe_name, _wb_cache=wb_cache)
         except AppError as e:
-            ok = False
-            err_res = SheetResult(
+            result = SheetResult(
                 source_path=source_path,
                 recipe_name=recipe_name,
                 sheet_name=sheet_cfg.name,
                 dest_file=sheet_cfg.destination.file_path,
                 dest_sheet=sheet_cfg.destination.sheet_name,
                 rows_written=0,
-                message="ERROR",
+                message=str(e),
                 error_code=e.code,
                 error_message=e.message,
                 error_details=e.details,
             )
-            results.append(err_res)
-            if on_progress is not None:
-                try:
-                    on_progress("error", err_res)
-                except Exception:
-                    pass
-            break
-        except Exception as e:
+            results.append(result)
+            _emit("error", result)
             ok = False
-            err_res = SheetResult(
-                source_path=source_path,
-                recipe_name=recipe_name,
-                sheet_name=sheet_cfg.name,
-                dest_file=sheet_cfg.destination.file_path,
-                dest_sheet=sheet_cfg.destination.sheet_name,
-                rows_written=0,
-                message="ERROR",
-                error_code="UNEXPECTED",
-                error_message=str(e),
-                error_details=None,
-            )
-            results.append(err_res)
-            if on_progress is not None:
-                try:
-                    on_progress("error", err_res)
-                except Exception:
-                    pass
+            # Fail-fast: save any workbooks written so far, then stop.
+            for path, wb in wb_cache.items():
+                if path:
+                    try:
+                        wb.save(path)
+                    except Exception:
+                        pass
             break
 
-    report = RunReport(ok=ok, results=results)
-    if on_progress is not None:
-        try:
-            on_progress("done", report)
-        except Exception:
-            pass
-    return report
+        # Successful write: persist to disk so file reflects current state.
+        dest_path = sheet_cfg.destination.file_path
+        if dest_path and dest_path in wb_cache:
+            try:
+                wb_cache[dest_path].save(dest_path)
+            except Exception as save_err:
+                result = SheetResult(
+                    source_path=source_path,
+                    recipe_name=recipe_name,
+                    sheet_name=sheet_cfg.name,
+                    dest_file=dest_path,
+                    dest_sheet=sheet_cfg.destination.sheet_name,
+                    rows_written=0,
+                    message=f"Save failed: {save_err}",
+                    error_code="SAVE_FAILED",
+                    error_message=str(save_err),
+                )
+                results.append(result)
+                _emit("error", result)
+                ok = False
+                break
+
+        results.append(result)
+        _emit("result", result)
+
+    _emit("done", RunReport(ok=ok, results=results))
+    return RunReport(ok=ok, results=results)

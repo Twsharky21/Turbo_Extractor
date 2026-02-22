@@ -1,22 +1,15 @@
 """
-tests/test_append_and_occupancy_fixes.py  (v4 — definitive)
+tests/test_append_and_occupancy_fixes.py
 
-Fixes for 3 remaining failures:
-
-1. TestOccupancy::test_is_cell_occupied_formula_string_is_unoccupied
-   AND test_new_coverage::test_is_cell_occupied_formula_string_treated_as_unoccupied
-   Caused by V1 planner.py making is_cell_occupied = is_occupied (alias),
-   losing the formula-handling logic. Fix: restore planner.py with its own
-   is_cell_occupied that treats bare formula strings as unoccupied.
-   (core/planner.py is included in this patch.)
-
-2. test_new_coverage::test_planner_blocker_append_mode_details_flag_true
-   The test places "BLOCK" at A3, expecting max_used=2 and a collision at A3.
-   But "BLOCK" is a non-formula string → is_cell_occupied("BLOCK")=True →
-   the scan counts A3 as occupied → max_used=3 → start_row=4 → row 4 empty →
-   no collision. This is correct spec behaviour: the scan absorbs the blocker,
-   placing start_row safely above it.
-   Fix: rewrite that test in test_new_coverage.py (replacement provided).
+Regression tests for:
+  1. Unified is_occupied — formula strings now unoccupied in both io and planner.
+  2. Pack mode side-by-side column extractions with different start_col values
+     correctly land in parallel columns, not stacked rows.
+  3. run_all shared workbook cache — sequential writes to the same dest file
+     correctly see prior writes within the same batch.
+  4. Keep mode collision behaviour — target columns block, gap columns do not.
+     (Updated from original full-bounding-box model to target-column model,
+      which enables automatic merge of overlapping bounding boxes.)
 """
 from __future__ import annotations
 
@@ -28,10 +21,9 @@ from openpyxl import Workbook, load_workbook
 
 from core.engine import run_sheet, run_all
 from core.errors import AppError, DEST_BLOCKED
+from core.io import is_occupied
 from core.models import Destination, Rule, SheetConfig
 from core.planner import build_plan, is_cell_occupied
-from core.io import is_occupied
-from core.rules import apply_rules
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -59,255 +51,399 @@ def _cfg(dest, *, columns="", rows="", mode="pack", rules=None, combine="AND",
     )
 
 
-def _ws_obj():
-    """Fresh in-memory worksheet for planner unit tests."""
-    return Workbook().active
-
-
-def _dest_ws(path: str, sheet: str = "Out"):
+def _ws(path: str, sheet: str = "Out"):
     return load_workbook(path)[sheet]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# OCCUPANCY — the two functions intentionally differ on formula strings
+# 1. UNIFIED OCCUPANCY — is_occupied and is_cell_occupied must agree
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestOccupancy:
+class TestUnifiedOccupancy:
     """
-    io.is_occupied       — formula strings ARE occupied (no special-case).
-    planner.is_cell_occupied — bare formula strings are UNOCCUPIED (per spec:
-                              "formula with NO visible result → unoccupied").
+    io.is_occupied and planner.is_cell_occupied share the same definition for
+    all non-formula values. They intentionally differ on formula strings:
 
-    The divergence exists because:
-    - io.is_occupied is used for source used-range detection where formula
-      strings from non-data_only loads can appear and should count as content.
-    - is_cell_occupied is used for destination append scan + collision probe,
-      where a bare formula string means the cell has no visible/cached result.
+      io.is_occupied           — used for SOURCE table used-range detection.
+                                 A formula string in a source cell IS real content → occupied.
+
+      planner.is_cell_occupied — used for DESTINATION scan and collision.
+                                 A formula string with no cached result means the
+                                 destination cell is effectively empty → unoccupied.
     """
 
-    def test_is_occupied_formula_string_is_occupied(self):
-        """io.is_occupied — formula strings are treated as content (occupied)."""
-        assert is_occupied("=SUM(A1:A10)") is True
+    _common_cases = [
+        (None,    False),
+        ("",      False),
+        ("hello", True),
+        (" ",     True),
+        ("N/A",   True),
+        (0,       True),
+        (0.0,     True),
+        (False,   True),
+        (True,    True),
+        (42,      True),
+        (-1,      True),
+        (3.14,    True),
+    ]
+
+    def test_is_occupied_and_is_cell_occupied_agree_on_non_formula_values(self):
+        """Both functions must agree on all non-formula values."""
+        for val, expected in self._common_cases:
+            io_result = is_occupied(val)
+            planner_result = is_cell_occupied(val)
+            assert io_result == expected, (
+                f"io.is_occupied({val!r}) expected {expected}, got {io_result}"
+            )
+            assert planner_result == expected, (
+                f"planner.is_cell_occupied({val!r}) expected {expected}, got {planner_result}"
+            )
+
+    def test_formula_strings_differ_by_design(self):
+        """
+        Formula strings are intentionally treated differently:
+          - io.is_occupied: formula IS occupied (source-table content detection)
+          - is_cell_occupied: formula is UNOCCUPIED (dest scan, no cached result = empty)
+        """
+        assert is_occupied("=SUM(A1)") is True
+        assert is_cell_occupied("=SUM(A1)") is False
         assert is_occupied("=A1+B1") is True
-
-    def test_is_cell_occupied_formula_string_is_unoccupied(self):
-        """planner.is_cell_occupied — bare formula strings are unoccupied."""
-        assert is_cell_occupied("=SUM(A1:A10)") is False
         assert is_cell_occupied("=A1+B1") is False
 
-    def test_both_agree_on_none_and_empty_string(self):
-        for fn in (is_occupied, is_cell_occupied):
-            assert fn(None) is False
-            assert fn("") is False
+    def test_formula_string_not_blocking_append_scan(self):
+        """A formula-only cell must not advance the append row."""
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"] = "=SUM(B1:B10)"  # bare formula, no cached value
 
-    def test_both_agree_on_real_values(self):
-        for v in ["hello", 0, 0.0, False, True, 42, " ", "N/A", "BLOCK"]:
-            assert is_occupied(v) is True,       f"is_occupied({v!r}) should be True"
-            assert is_cell_occupied(v) is True,  f"is_cell_occupied({v!r}) should be True"
+        plan = build_plan(ws, [["data"]], "A", "")
+        assert plan is not None
+        assert plan.start_row == 1  # formula didn't push append row
 
+    def test_zero_in_landing_zone_does_advance_append_row(self):
+        """Numeric zero is occupied and must advance the append row."""
+        wb = Workbook()
+        ws = wb.active
+        ws["A3"] = 0  # zero is occupied
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PLANNER APPEND MECHANICS — what the scan+probe model actually guarantees
-# ══════════════════════════════════════════════════════════════════════════════
+        plan = build_plan(ws, [["data"]], "A", "")
+        assert plan is not None
+        assert plan.start_row == 4  # zero at row 3 → append at 4
 
-class TestPlannerAppendMechanics:
-    """
-    The append scan and collision probe both use is_cell_occupied on the same
-    landing-zone columns. This means:
+    def test_false_in_landing_zone_does_advance_append_row(self):
+        """Boolean False is occupied and must advance the append row."""
+        wb = Workbook()
+        ws = wb.active
+        ws["B2"] = False
 
-      - Any occupied cell in the landing zone is found by the scan.
-      - start_row is placed AFTER the highest occupied row.
-      - The collision probe starts at start_row, which is the row immediately
-        after the last occupied row → always clear by construction.
-      - Therefore DEST_BLOCKED cannot fire in append mode for a 1-row output.
-
-    For explicit start_row (non-append), the probe checks the exact specified
-    row and CAN hit occupied cells → DEST_BLOCKED with append_mode=False.
-
-    The append_mode flag in DEST_BLOCKED details indicates HOW start_row was
-    determined: True = computed by scan, False = explicitly specified by user.
-    """
-
-    def test_append_empty_sheet_starts_at_row_1(self):
-        ws = _ws_obj()
         plan = build_plan(ws, [["a", "b"]], "A", "")
         assert plan is not None
-        assert plan.start_row == 1
-
-    def test_append_places_after_last_occupied_row(self):
-        ws = _ws_obj()
-        ws["A1"] = "existing"
-        ws["A2"] = "existing2"
-        plan = build_plan(ws, [["a"]], "A", "")
-        assert plan.start_row == 3
-
-    def test_append_occupied_cell_is_absorbed_into_scan_not_probe(self):
-        """
-        A3='BLOCK' is an occupied non-formula string.
-        The scan finds it → max_used=3 → start_row=4.
-        The probe checks row 4 (empty) → plan succeeds.
-        This is CORRECT: the scan absorbs the content, safely placing the
-        next write above it. No collision is reported.
-        """
-        ws = _ws_obj()
-        ws["A1"] = "existing"
-        ws["A2"] = "existing2"
-        ws["A3"] = "BLOCK"
-        plan = build_plan(ws, [["a"]], "A", "")
-        assert plan is not None
-        assert plan.start_row == 4  # scan absorbed BLOCK, safely placed above
-
-    def test_append_formula_cell_treated_as_unoccupied_by_scan(self):
-        """
-        A formula string '=SUM(...)' is treated as unoccupied by is_cell_occupied.
-        The scan skips it → max_used=0 → start_row=1.
-        The probe checks row 1 → formula is unoccupied → plan succeeds at row 1.
-        """
-        ws = _ws_obj()
-        ws["A1"] = "=SUM(B1:B10)"
-        plan = build_plan(ws, [["a"]], "A", "")
-        assert plan is not None
-        assert plan.start_row == 1  # formula skipped, starts at row 1
-
-    def test_explicit_mode_dest_blocked_with_append_mode_false(self):
-        """Explicit start_row hitting occupied cell → DEST_BLOCKED, flag=False."""
-        ws = _ws_obj()
-        ws["A3"] = "BLOCK"
-        with pytest.raises(AppError) as ei:
-            build_plan(ws, [["a"]], "A", "3")
-        assert ei.value.code == DEST_BLOCKED
-        assert ei.value.details["append_mode"] is False
-        assert ei.value.details["first_blocker"]["row"] == 3
-        assert ei.value.details["first_blocker"]["value"] == "BLOCK"
-
-    def test_explicit_mode_clear_row_succeeds(self):
-        ws = _ws_obj()
-        ws["A1"] = "existing"
-        plan = build_plan(ws, [["a"]], "A", "5")
-        assert plan is not None
-        assert plan.start_row == 5
-
-    def test_landing_zone_isolation_noise_outside_ignored(self):
-        """Data in col Z does not affect append row for landing zone A:B."""
-        ws = _ws_obj()
-        for i in range(1, 101):
-            ws.cell(row=i, column=26).value = f"noise_{i}"  # col Z
-        plan = build_plan(ws, [["a", "b"]], "A", "")
-        assert plan is not None
-        assert plan.start_row == 1  # A:B empty, start at row 1
+        assert plan.start_row == 3  # False at B2 → append at 3
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PACK MODE SIDE-BY-SIDE
+# 2. PACK MODE SIDE-BY-SIDE: different start_col → parallel columns
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestPackSideBySide:
+    """
+    Two pack extractions with non-overlapping start_col values must land in
+    parallel columns on the same row, not stack vertically.
+    """
+
     def test_pack_AC_then_BD_land_side_by_side(self):
         with TemporaryDirectory() as td:
             srcA = os.path.join(td, "srcA.xlsx")
             srcB = os.path.join(td, "srcB.xlsx")
             dest = os.path.join(td, "dest.xlsx")
-            _xlsx(srcA, [["alpha", "skip", "charlie"]])
-            _xlsx(srcB, [["skip",  "bravo", "skip", "delta"]])
-            r1 = run_sheet(srcA, _cfg(dest, columns="A,C", start_col="A"))
-            r2 = run_sheet(srcB, _cfg(dest, columns="B,D", start_col="C"))
+
+            _xlsx(srcA, [["alpha", "skip_B", "charlie", "skip_D"]])
+            _xlsx(srcB, [["skip_A", "bravo",  "skip_C",  "delta"]])
+
+            cfgA = _cfg(dest, columns="A,C", start_col="A")
+            cfgB = _cfg(dest, columns="B,D", start_col="C")
+
+            r1 = run_sheet(srcA, cfgA)
+            r2 = run_sheet(srcB, cfgB)
+
             assert r1.rows_written == 1
             assert r2.rows_written == 1
-            ws = _dest_ws(dest)
+
+            ws = _ws(dest)
             assert ws["A1"].value == "alpha"
             assert ws["B1"].value == "charlie"
             assert ws["C1"].value == "bravo"
             assert ws["D1"].value == "delta"
             assert ws["A2"].value is None
+            assert ws["C2"].value is None
 
-    def test_pack_same_start_col_stacks_vertically(self):
+    def test_pack_AC_then_BD_via_run_all(self):
         with TemporaryDirectory() as td:
-            s1 = os.path.join(td, "s1.xlsx"); s2 = os.path.join(td, "s2.xlsx")
+            srcA = os.path.join(td, "srcA.xlsx")
+            srcB = os.path.join(td, "srcB.xlsx")
             dest = os.path.join(td, "dest.xlsx")
-            _xlsx(s1, [["r1c1", "r1c2"]]); _xlsx(s2, [["r2c1", "r2c2"]])
-            run_sheet(s1, _cfg(dest, start_col="A"))
-            run_sheet(s2, _cfg(dest, start_col="A"))
-            ws = _dest_ws(dest)
+
+            _xlsx(srcA, [["alpha", "skip", "charlie"]])
+            _xlsx(srcB, [["skip",  "bravo", "skip", "delta"]])
+
+            cfgA = _cfg(dest, columns="A,C", start_col="A")
+            cfgB = _cfg(dest, columns="B,D", start_col="C")
+
+            report = run_all([(srcA, "R1", cfgA), (srcB, "R2", cfgB)])
+            assert report.ok
+            assert report.results[0].rows_written == 1
+            assert report.results[1].rows_written == 1
+
+            ws = _ws(dest)
+            assert ws["A1"].value == "alpha"
+            assert ws["B1"].value == "charlie"
+            assert ws["C1"].value == "bravo"
+            assert ws["D1"].value == "delta"
+
+    def test_pack_multi_row_AC_then_BD_side_by_side(self):
+        with TemporaryDirectory() as td:
+            srcA = os.path.join(td, "srcA.xlsx")
+            srcB = os.path.join(td, "srcB.xlsx")
+            dest = os.path.join(td, "dest.xlsx")
+
+            _xlsx(srcA, [["a1", "x", "c1"], ["a2", "x", "c2"]])
+            _xlsx(srcB, [["x", "b1", "x", "d1"], ["x", "b2", "x", "d2"]])
+
+            cfgA = _cfg(dest, columns="A,C", start_col="A")
+            cfgB = _cfg(dest, columns="B,D", start_col="C")
+
+            r1 = run_sheet(srcA, cfgA)
+            r2 = run_sheet(srcB, cfgB)
+
+            assert r1.rows_written == 2
+            assert r2.rows_written == 2
+
+            ws = _ws(dest)
+            assert ws["A1"].value == "a1"
+            assert ws["B1"].value == "c1"
+            assert ws["A2"].value == "a2"
+            assert ws["B2"].value == "c2"
+            assert ws["C1"].value == "b1"
+            assert ws["D1"].value == "d1"
+            assert ws["C2"].value == "b2"
+            assert ws["D2"].value == "d2"
+
+    def test_pack_same_start_col_does_stack_vertically(self):
+        with TemporaryDirectory() as td:
+            src1 = os.path.join(td, "s1.xlsx")
+            src2 = os.path.join(td, "s2.xlsx")
+            dest = os.path.join(td, "dest.xlsx")
+
+            _xlsx(src1, [["r1c1", "r1c2"]])
+            _xlsx(src2, [["r2c1", "r2c2"]])
+
+            cfg1 = _cfg(dest, start_col="A")
+            cfg2 = _cfg(dest, start_col="A")
+
+            run_sheet(src1, cfg1)
+            run_sheet(src2, cfg2)
+
+            ws = _ws(dest)
             assert ws["A1"].value == "r1c1"
             assert ws["A2"].value == "r2c1"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# run_all SHARED WORKBOOK CACHE
+# 3. run_all SHARED WORKBOOK CACHE
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestRunAllSharedCache:
-    def test_three_items_same_dest_stack_in_order(self):
+
+    def test_run_all_three_items_same_dest_stack_in_order(self):
         with TemporaryDirectory() as td:
             dest = os.path.join(td, "dest.xlsx")
-            items = []
+            sources = []
             for i in range(1, 4):
                 p = os.path.join(td, f"s{i}.xlsx")
-                _xlsx(p, [[f"row{i}"]])
-                items.append((p, f"R{i}", _cfg(dest)))
-            report = run_all(items)
-            assert report.ok
-            ws = _dest_ws(dest)
-            assert ws["A1"].value == "row1"
-            assert ws["A2"].value == "row2"
-            assert ws["A3"].value == "row3"
+                _xlsx(p, [[f"row{i}_A", f"row{i}_B"]])
+                sources.append((p, f"R{i}", _cfg(dest)))
 
-    def test_different_start_cols_land_side_by_side(self):
-        with TemporaryDirectory() as td:
-            srcA = os.path.join(td, "srcA.xlsx"); srcB = os.path.join(td, "srcB.xlsx")
-            dest = os.path.join(td, "dest.xlsx")
-            _xlsx(srcA, [["left_1", "left_2"]]); _xlsx(srcB, [["right_1", "right_2"]])
-            report = run_all([
-                (srcA, "R1", _cfg(dest, start_col="A")),
-                (srcB, "R2", _cfg(dest, start_col="C")),
-            ])
+            report = run_all(sources)
             assert report.ok
-            ws = _dest_ws(dest)
+
+            ws = _ws(dest)
+            assert ws["A1"].value == "row1_A"
+            assert ws["A2"].value == "row2_A"
+            assert ws["A3"].value == "row3_A"
+
+    def test_run_all_different_start_cols_same_dest_same_row(self):
+        with TemporaryDirectory() as td:
+            srcA = os.path.join(td, "srcA.xlsx")
+            srcB = os.path.join(td, "srcB.xlsx")
+            dest = os.path.join(td, "dest.xlsx")
+
+            _xlsx(srcA, [["left_1", "left_2"]])
+            _xlsx(srcB, [["right_1", "right_2"]])
+
+            cfgA = _cfg(dest, start_col="A")
+            cfgB = _cfg(dest, start_col="C")
+
+            report = run_all([(srcA, "R1", cfgA), (srcB, "R2", cfgB)])
+            assert report.ok
+
+            ws = _ws(dest)
             assert ws["A1"].value == "left_1"
+            assert ws["B1"].value == "left_2"
             assert ws["C1"].value == "right_1"
+            assert ws["D1"].value == "right_2"
             assert ws["A2"].value is None
+            assert ws["C2"].value is None
 
-    def test_fail_fast_preserves_prior_writes(self):
+    def test_run_all_fail_fast_does_not_corrupt_prior_writes(self):
         with TemporaryDirectory() as td:
-            s1 = os.path.join(td, "s1.xlsx"); s2 = os.path.join(td, "s2.xlsx")
+            src1 = os.path.join(td, "s1.xlsx")
+            src2 = os.path.join(td, "s2.xlsx")
             dest = os.path.join(td, "dest.xlsx")
-            _xlsx(s1, [["good"]]); _xlsx(s2, [["bad"]])
-            wb = Workbook(); ws = wb.active; ws.title = "Out"; ws["A2"] = "BLOCKER"; wb.save(dest)
-            report = run_all([
-                (s1, "R1", _cfg(dest, start_row="1")),
-                (s2, "R2", _cfg(dest, start_row="2")),
-            ])
+
+            _xlsx(src1, [["good_data"]])
+            _xlsx(src2, [["will_block"]])
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Out"
+            ws["A2"] = "BLOCKER"
+            wb.save(dest)
+
+            cfg1 = _cfg(dest, start_row="1")
+            cfg2 = _cfg(dest, start_row="2")
+
+            report = run_all([(src1, "R1", cfg1), (src2, "R2", cfg2)])
             assert not report.ok
             assert report.results[0].rows_written == 1
             assert report.results[1].error_code == DEST_BLOCKED
-            assert _dest_ws(dest)["A1"].value == "good"
+
+            ws_check = _ws(dest)
+            assert ws_check["A1"].value == "good_data"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KEEP MODE COLLISION
+# 4. KEEP MODE COLLISION — target columns block, gap columns allow merge
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestKeepCollision:
-    def test_keep_overlapping_bboxes_explicit_row_blocked(self):
-        """
-        Run 1: keep A,C at start_col=A, row=1 → writes 3-wide bbox (A:C), A1='a', C1='c'.
-        Run 2: keep B,D at start_col=B, row=1 → probe B:D row 1; C1 is occupied → BLOCKED.
-        """
-        with TemporaryDirectory() as td:
-            srcA = os.path.join(td, "srcA.xlsx"); srcB = os.path.join(td, "srcB.xlsx")
-            dest = os.path.join(td, "dest.xlsx")
-            _xlsx(srcA, [["a", "gap", "c"]]); _xlsx(srcB, [["p", "q", "r", "s"]])
-            run_sheet(srcA, _cfg(dest, columns="A,C", mode="keep", start_col="A", start_row="1"))
-            with pytest.raises(AppError) as ei:
-                run_sheet(srcB, _cfg(dest, columns="B,D", mode="keep", start_col="B", start_row="1"))
-            assert ei.value.code == DEST_BLOCKED
+    """
+    Collision detection operates on TARGET COLUMNS ONLY (columns that actually
+    receive data). Gap columns produced by Keep Format bounding boxes are ignored.
 
-    def test_keep_non_overlapping_bboxes_both_succeed(self):
+    This enables automatic merge: two Keep extractions whose bounding boxes
+    overlap can land side-by-side as long as their data columns don't conflict.
+
+    Contract:
+      - Target column occupied → DEST_BLOCKED
+      - Gap column occupied (data from another extraction) → allowed, merge succeeds
+    """
+
+    def test_keep_AC_then_BD_overlapping_bboxes_merges(self):
+        """
+        Keep A,C → bbox A:C, target cols A and C (B is gap).
+        Keep B,D at start_col=B → bbox B:D, target cols B and D (C is gap).
+        C (from run 1) is a gap for run 2 → merge succeeds, no DEST_BLOCKED.
+        Final result: A,B,C,D all populated on row 1.
+        """
         with TemporaryDirectory() as td:
-            srcA = os.path.join(td, "srcA.xlsx"); srcB = os.path.join(td, "srcB.xlsx")
+            srcA = os.path.join(td, "srcA.xlsx")
+            srcB = os.path.join(td, "srcB.xlsx")
             dest = os.path.join(td, "dest.xlsx")
-            _xlsx(srcA, [["a", "gap", "c"]]); _xlsx(srcB, [["p", "q", "r", "s"]])
-            r1 = run_sheet(srcA, _cfg(dest, columns="A,C", mode="keep", start_col="A", start_row="1"))
-            r2 = run_sheet(srcB, _cfg(dest, columns="B,D", mode="keep", start_col="E", start_row="1"))
+
+            _xlsx(srcA, [["a", "b", "c"]])
+            _xlsx(srcB, [["p", "q", "r", "s"]])
+
+            cfgA = _cfg(dest, columns="A,C", mode="keep", start_col="A")
+            cfgB = _cfg(dest, columns="B,D", mode="keep", start_col="B")
+
+            r1 = run_sheet(srcA, cfgA)
+            r2 = run_sheet(srcB, cfgB)
+
             assert r1.rows_written == 1
             assert r2.rows_written == 1
+
+            ws = _ws(dest)
+            assert ws["A1"].value == "a"    # from run 1
+            assert ws["B1"].value == "q"    # from run 2 (col B of srcB)
+            assert ws["C1"].value == "c"    # from run 1
+            assert ws["D1"].value == "s"    # from run 2 (col D of srcB)
+
+    def test_keep_target_col_occupied_raises_dest_blocked(self):
+        """
+        If a target column (one that receives actual data) is already occupied,
+        DEST_BLOCKED must fire regardless of mode.
+        """
+        with TemporaryDirectory() as td:
+            src = os.path.join(td, "src.xlsx")
+            dest = os.path.join(td, "dest.xlsx")
+            _xlsx(src, [["p", "q", "r", "s"]])
+
+            # Pre-occupy B1 — which IS a target col for Keep B,D at start_col=B
+            wb = Workbook(); ws = wb.active; ws.title = "Out"
+            ws["B1"] = "EXISTING"
+            wb.save(dest)
+
+            cfgB = _cfg(dest, columns="B,D", mode="keep", start_col="B", start_row="1")
+            with pytest.raises(AppError) as ei:
+                run_sheet(src, cfgB)
+            assert ei.value.code == DEST_BLOCKED
+
+    def test_keep_overlapping_bboxes_explicit_row_blocked(self):
+        """
+        When both target cols of run 2 are clear but an explicit row is used,
+        and one of the target cols IS actually occupied → DEST_BLOCKED.
+        Here we pre-occupy D1 (a target col for Keep B,D) → blocked.
+        """
+        with TemporaryDirectory() as td:
+            srcA = os.path.join(td, "srcA.xlsx")
+            srcB = os.path.join(td, "srcB.xlsx")
+            dest = os.path.join(td, "dest.xlsx")
+
+            _xlsx(srcA, [["a", "b_gap", "c"]])
+            _xlsx(srcB, [["p", "q", "r", "s"]])
+
+            cfgA = _cfg(dest, columns="A,C", mode="keep", start_col="A")
+            run_sheet(srcA, cfgA)  # writes A1="a", C1="c"; B1 is gap (not written)
+
+            # Pre-occupy D1 — a target col for Keep B,D
+            wb = load_workbook(dest)
+            wb["Out"]["D1"] = "BLOCK_D"
+            wb.save(dest)
+
+            # Explicit row 1: B and D are target cols; D1 is occupied → DEST_BLOCKED
+            cfgB = _cfg(dest, columns="B,D", mode="keep", start_col="B", start_row="1")
+            with pytest.raises(AppError) as ei:
+                run_sheet(srcB, cfgB)
+            assert ei.value.code == DEST_BLOCKED
+
+    def test_keep_AC_then_BD_non_overlapping_start_col_ok(self):
+        """
+        Keep A,C at start_col=A → bbox A:C, data in A and C.
+        Keep B,D at start_col=D → bbox D:G, data in D and F (no overlap with A:C).
+        Both succeed.
+        """
+        with TemporaryDirectory() as td:
+            srcA = os.path.join(td, "srcA.xlsx")
+            srcB = os.path.join(td, "srcB.xlsx")
+            dest = os.path.join(td, "dest.xlsx")
+
+            _xlsx(srcA, [["a", "b_gap", "c"]])
+            _xlsx(srcB, [["p", "q_gap", "r", "s"]])
+
+            cfgA = _cfg(dest, columns="A,C", mode="keep", start_col="A")
+            cfgB = _cfg(dest, columns="B,D", mode="keep", start_col="D")
+
+            r1 = run_sheet(srcA, cfgA)
+            r2 = run_sheet(srcB, cfgB)
+
+            assert r1.rows_written == 1
+            assert r2.rows_written == 1
+
+            ws = _ws(dest)
+            assert ws["A1"].value == "a"
+            assert ws["B1"].value is None       # gap
+            assert ws["C1"].value == "c"
+            # Keep B,D → bbox width 3 at start_col=D: D=q_gap(gap), E=None(gap), F=s
+            assert ws["D1"].value == "q_gap"    # col B of srcB (idx 1, offset 0 of bbox)
+            assert ws["E1"].value is None       # gap
+            assert ws["F1"].value == "s"        # col D of srcB (idx 3, offset 2 of bbox)

@@ -1,50 +1,44 @@
+"""
+core/planner.py — Write-plan builder.
+
+Delegates ALL occupancy logic to core.landing.
+
+Key behaviour change: scan and collision probe operate on TARGET COLUMNS ONLY
+(columns in the shaped grid that carry actual data). Gap columns produced by
+Keep Format bounding boxes are ignored for placement. This enables automatic
+merge: two extractions whose bounding boxes overlap land side-by-side as long
+as their data columns don't conflict.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .errors import AppError, DEST_BLOCKED, BAD_SPEC
-from .io import is_occupied
+from .landing import (
+    is_dest_cell_occupied,
+    find_target_col_offsets,
+    read_zone,
+    scan_target_cols,
+    probe_target_cols,
+)
 from .parsing import col_letters_to_index, col_index_to_letters
 
-
-def is_cell_occupied(value: Any) -> bool:
-    """
-    Destination occupancy definition for planner collision + append scan.
-
-    Per spec (Paste_Modes_and_Destination_AI_Spec.txt):
-      OCCUPIED  — text, numbers (incl. 0), dates/booleans,
-                  formula WITH a visible/cached result
-      UNOCCUPIED — None, empty string "",
-                   formula with NO visible result (no cached value)
-
-    Formula handling: a bare formula string starting with '=' that has
-    reached this function means openpyxl was opened WITHOUT data_only=True
-    and the cell has no cached result. Treat as unoccupied.
-    When opened with data_only=True (as load_xlsx does), the formula is
-    replaced by its cached value, so this branch is rarely hit in practice.
-    """
-    if value is None:
-        return False
-    if isinstance(value, str):
-        if value == "":
-            return False
-        if value.startswith("="):
-            # Bare formula string with no cached result → unoccupied
-            return False
-    return True
+# Backward-compat alias for existing tests that import is_cell_occupied from planner
+is_cell_occupied = is_dest_cell_occupied
 
 
 @dataclass(frozen=True)
 class WritePlan:
-    start_row: int                 # 1-based
-    start_col: int                 # 1-based
+    start_row: int                  # 1-based
+    start_col: int                  # 1-based
     width: int
     height: int
-    landing_cols: Tuple[int, int]  # (col_start_1based, col_end_1based)
-    landing_rows: Tuple[int, int]  # (row_start_1based, row_end_1based)
+    landing_cols: Tuple[int, int]   # full bounding box (col_start, col_end)
+    landing_rows: Tuple[int, int]   # (row_start, row_end)
+    target_cols: Tuple[int, ...]    # absolute 1-based cols that receive data
 
 
 def _shape_dims(shaped: List[List[Any]]) -> Tuple[int, int]:
@@ -55,24 +49,6 @@ def _shape_dims(shaped: List[List[Any]]) -> Tuple[int, int]:
     return h, w
 
 
-def _max_used_row_in_cols(ws: Worksheet, col_start: int, col_end: int) -> int:
-    """
-    Scan ONLY the landing-zone columns to find the maximum occupied row.
-    Uses is_cell_occupied (planner's definition, with formula handling).
-    """
-    max_row = 0
-    upper = ws.max_row or 0
-    if upper < 1:
-        return 0
-
-    for r in range(1, upper + 1):
-        for c in range(col_start, col_end + 1):
-            if is_cell_occupied(ws.cell(row=r, column=c).value):
-                if r > max_row:
-                    max_row = r
-    return max_row
-
-
 def build_plan(
     ws: Worksheet,
     shaped: List[List[Any]],
@@ -80,14 +56,18 @@ def build_plan(
     start_row_str: str,
 ) -> Optional[WritePlan]:
     """
-    Build a write plan for a single shaped output table.
+    Build a validated write plan.
+
+    Scan and probe use TARGET COLUMNS ONLY — the subset of bounding-box columns
+    that actually carry non-None data in the shaped grid. Gap columns (all-None,
+    produced by Keep Format) are never scanned or probed.
 
     start_row_str:
-      - "" => append mode: place after max used row across landing columns.
-      - numeric => explicit row; no append scan.
+      ""       → append / merge mode: scan target cols, place after max used row.
+      numeric  → explicit mode: place at exactly that row, probe target cols.
 
-    Collision probe: full bounding rectangle. Any occupied cell → DEST_BLOCKED.
-    If shaped height == 0 or width == 0: returns None (no write).
+    Raises AppError(DEST_BLOCKED) if any target column cell in the landing
+    rectangle is occupied. Returns None if shaped is empty.
     """
     height, width = _shape_dims(shaped)
     if height == 0 or width == 0:
@@ -95,11 +75,22 @@ def build_plan(
 
     start_col = col_letters_to_index(start_col_letters)
     col_end = start_col + width - 1
-
     append_mode = (start_row_str or "").strip() == ""
 
+    # Determine which columns within the shaped grid carry actual data.
+    offsets = find_target_col_offsets(shaped)
+    if not offsets:
+        # Shaped grid is all-None — nothing to write.
+        return None
+    target_abs_cols = [start_col + o for o in offsets]
+
+    t_col_min = min(target_abs_cols)
+    t_col_max = max(target_abs_cols)
+
     if append_mode:
-        max_used = _max_used_row_in_cols(ws, start_col, col_end)
+        # Scan only target columns to find the highest occupied row.
+        scan_map = read_zone(ws, t_col_min, t_col_max, extra_rows=0)
+        max_used = scan_target_cols(scan_map, target_abs_cols)
         start_row = max_used + 1 if max_used > 0 else 1
     else:
         try:
@@ -109,29 +100,32 @@ def build_plan(
         if start_row <= 0:
             raise AppError(BAD_SPEC, f"Start row must be >= 1: {start_row_str!r}")
 
-    # Collision probe: full bounding rectangle
     row_end = start_row + height - 1
 
-    for r in range(start_row, row_end + 1):
-        for c in range(start_col, col_end + 1):
-            cell_val = ws.cell(row=r, column=c).value
-            if is_cell_occupied(cell_val):
-                raise AppError(
-                    DEST_BLOCKED,
-                    "Destination landing zone is blocked.",
-                    details={
-                        "append_mode": append_mode,
-                        "target_start": f"{col_index_to_letters(start_col)}{start_row}",
-                        "landing_cols": f"{col_index_to_letters(start_col)}:{col_index_to_letters(col_end)}",
-                        "landing_rows": f"{start_row}:{row_end}",
-                        "first_blocker": {
-                            "row": r,
-                            "col": c,
-                            "col_letter": col_index_to_letters(c),
-                            "value": cell_val,
-                        },
-                    },
-                )
+    # Probe target columns in the landing rectangle.
+    extra = max(0, row_end - (ws.max_row or 0))
+    probe_map = read_zone(ws, t_col_min, t_col_max, extra_rows=extra)
+
+    blocker = probe_target_cols(probe_map, start_row, row_end, target_abs_cols)
+    if blocker is not None:
+        b_row, b_col, b_val = blocker
+        raise AppError(
+            DEST_BLOCKED,
+            "Destination landing zone is blocked.",
+            details={
+                "append_mode": append_mode,
+                "target_start": f"{col_index_to_letters(start_col)}{start_row}",
+                "landing_cols": f"{col_index_to_letters(start_col)}:{col_index_to_letters(col_end)}",
+                "landing_rows": f"{start_row}:{row_end}",
+                "target_data_cols": [col_index_to_letters(c) for c in target_abs_cols],
+                "first_blocker": {
+                    "row": b_row,
+                    "col": b_col,
+                    "col_letter": col_index_to_letters(b_col),
+                    "value": b_val,
+                },
+            },
+        )
 
     return WritePlan(
         start_row=start_row,
@@ -140,4 +134,5 @@ def build_plan(
         height=height,
         landing_cols=(start_col, col_end),
         landing_rows=(start_row, row_end),
+        target_cols=tuple(target_abs_cols),
     )

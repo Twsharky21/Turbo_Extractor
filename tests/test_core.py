@@ -355,19 +355,20 @@ def test_planner_blocker_explicit_mode_details_flag_false():
 
 def test_planner_blocker_append_mode_details_flag_true():
     """
-    Triggers DEST_BLOCKED in append mode by using a 2-wide output where the
-    scan sees only col A (max_used=2), but col B at start_row=3 has a blocker.
+    In append mode the scan covers ALL target columns, so any occupied cell
+    is absorbed into the scan and pushes start_row past it.
+    DEST_BLOCKED is therefore impossible in pure append mode (by design).
+    Verify that a cell inside the landing zone does NOT raise.
     """
     ws = _ws()
     ws["A1"] = "existing"
     ws["A2"] = "existing2"
-    ws["B3"] = "BLOCKER_IN_B"  # not counted by col-A scan, but inside probe rect
+    ws["B3"] = "BLOCKER_IN_B"   # scan sees this → max_used=3 → start_row=4
 
-    with pytest.raises(AppError) as ei:
-        build_plan(ws, [["a", "b"]], "A", "")  # append mode, width=2
-
-    assert ei.value.code == DEST_BLOCKED
-    assert ei.value.details["append_mode"] is True
+    # Must NOT raise — blocker is absorbed by the scan
+    plan = build_plan(ws, [["a", "b"]], "A", "")   # append mode, width=2
+    assert plan is not None
+    assert plan.start_row == 4                      # placed safely after B3
 
 
 def test_planner_blocker_details_contain_first_blocker_fields():

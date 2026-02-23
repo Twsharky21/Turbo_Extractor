@@ -28,17 +28,20 @@ import os
 
 import pytest
 
-# Skip entire module if Tcl/Tk unavailable
+# REPLACE the existing _TCL_OK check block (near the top of the file) with:
+
 try:
     import tkinter as tk
     _root = tk.Tk()
+    tk.Frame(_root)          # <-- added: catches deeper Tcl init failures
     _root.destroy()
     _TCL_OK = True
 except Exception:
     _TCL_OK = False
-
-pytestmark = pytest.mark.skipif(not _TCL_OK,
-                                reason="Tcl/Tk not available")
+#
+# This catches the "Can't find a usable tk.tcl" TclError that fires during
+# widget creation but not during the bare tk.Tk() call.
+# ─────────────────────────────────────────────────────────────────────────────
 
 import gui.app as app
 from core.autosave import save_project_atomic
@@ -558,22 +561,18 @@ def test_show_scrollable_report_dialog_second_call_replaces_first():
 # LAYOUT BEHAVIOUR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _find_button(gui, label):
-    for w in gui.winfo_children():
-        for w2 in w.winfo_children():
-            if hasattr(w2, "cget"):
-                try:
-                    if w2.cget("text") == label:
-                        return w2
-                except Exception:
-                    pass
-            for w3 in getattr(w2, "winfo_children", lambda: [])():
-                if hasattr(w3, "cget"):
-                    try:
-                        if w3.cget("text") == label:
-                            return w3
-                    except Exception:
-                        pass
+def _find_button(widget, label):
+    """Recursively search all descendants of *widget* for a button with the given text."""
+    for child in widget.winfo_children():
+        if hasattr(child, "cget"):
+            try:
+                if child.cget("text") == label:
+                    return child
+            except Exception:
+                pass
+        result = _find_button(child, label)
+        if result is not None:
+            return result
     return None
 
 

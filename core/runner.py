@@ -18,7 +18,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
 
-from .errors import AppError, SOURCE_READ_FAILED, SHEET_NOT_FOUND
+from .errors import (
+    AppError,
+    SOURCE_READ_FAILED, SHEET_NOT_FOUND,
+    FILE_LOCKED, SAVE_FAILED, MISSING_DEST_PATH,
+)
 from .models import SheetConfig, SheetResult
 from .parsing import parse_columns, parse_rows
 from .io import load_csv, load_xlsx, compute_used_range, normalize_table
@@ -60,6 +64,12 @@ def _load_source_table(source_path: str, workbook_sheet: str) -> List[List[Any]]
         if ext == ".csv":
             return load_csv(source_path)
         return load_xlsx(source_path, workbook_sheet)
+    except PermissionError:
+        raise AppError(
+            FILE_LOCKED,
+            f"Source file is locked: {source_path}",
+            {"path": source_path},
+        )
     except ValueError as e:
         raise AppError(SHEET_NOT_FOUND, str(e))
     except AppError:
@@ -70,9 +80,21 @@ def _load_source_table(source_path: str, workbook_sheet: str) -> List[List[Any]]
 
 def _open_or_create_dest(dest_path: str) -> Workbook:
     """Open an existing workbook or create a blank one."""
-    if dest_path and os.path.exists(dest_path):
-        return load_workbook(dest_path)
-    return Workbook()
+    try:
+        if dest_path and os.path.exists(dest_path):
+            return load_workbook(dest_path)
+        return Workbook()
+    except PermissionError:
+        raise AppError(
+            FILE_LOCKED,
+            f"Destination file is locked: {dest_path}",
+            {"path": dest_path},
+        )
+    except Exception as e:
+        raise AppError(
+            SOURCE_READ_FAILED,
+            f"Could not open destination file: {e}",
+        )
 
 
 def _get_or_create_sheet(wb: Workbook, name: str):
@@ -125,6 +147,13 @@ def run_sheet(
     _wb_cache: optional dict keyed by dest_path. When provided (by batch.run_all),
                the workbook is NOT saved here. When None (standalone), saves here.
     """
+    dest_path = sheet_cfg.destination.file_path
+    if not (dest_path or "").strip():
+        raise AppError(
+            MISSING_DEST_PATH,
+            "Destination file path is blank.",
+        )
+
     table = _load_source_table(source_path, sheet_cfg.workbook_sheet)
     table = _apply_source_start_row(table, getattr(sheet_cfg, "source_start_row", ""))
 
@@ -168,7 +197,6 @@ def run_sheet(
         shaped = shape_pack(selected)
 
     # Steps 7–8 — plan, collision check, write
-    dest_path = sheet_cfg.destination.file_path
     standalone = _wb_cache is None
 
     if standalone:
@@ -190,7 +218,20 @@ def run_sheet(
         rows_written = apply_write_plan(ws, shaped, plan)
 
     if standalone and dest_path:
-        wb.save(dest_path)
+        try:
+            wb.save(dest_path)
+        except PermissionError:
+            raise AppError(
+                FILE_LOCKED,
+                f"Destination file is open in another program: {dest_path}",
+                {"path": dest_path},
+            )
+        except Exception as e:
+            raise AppError(
+                SAVE_FAILED,
+                str(e),
+                {"path": dest_path},
+            )
 
     return SheetResult(
         source_path=source_path,

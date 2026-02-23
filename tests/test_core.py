@@ -511,24 +511,6 @@ def test_shape_pack_returns_rows_unchanged():
     assert shape_pack(rows) == rows
 
 
-def test_shape_keep_preserves_gaps_between_selected_rows_and_cols():
-    original = [
-        ["A1", "B1", "C1"],
-        ["A2", "B2", "C2"],
-        ["A3", "B3", "C3"],
-    ]
-    result = shape_keep(original, [0, 2], [0, 2])
-    # bounding box: rows 0-2, cols 0-2 → 3×3
-    assert len(result) == 3
-    assert len(result[0]) == 3
-    assert result[0][0] == "A1"
-    assert result[0][1] is None   # gap col
-    assert result[0][2] == "C1"
-    assert result[1][0] is None   # gap row
-    assert result[2][0] == "A3"
-    assert result[2][2] == "C3"
-
-
 def test_shape_keep_empty_col_indices_uses_all_cols():
     original = [["a", "b", "c"], ["d", "e", "f"]]
     result = shape_keep(original, [0, 1], [])
@@ -539,19 +521,6 @@ def test_shape_keep_empty_row_indices_uses_all_rows():
     original = [["a", "b"], ["c", "d"]]
     result = shape_keep(original, [], [0, 1])
     assert result == original
-
-
-def test_shape_keep_bounding_box_height_and_width():
-    original = [
-        ["a", "b", "c", "d", "e"],
-        ["f", "g", "h", "i", "j"],
-        ["k", "l", "m", "n", "o"],
-        ["p", "q", "r", "s", "t"],
-        ["u", "v", "w", "x", "y"],
-    ]
-    result = shape_keep(original, [0, 2, 4], [0, 2, 4])
-    assert len(result) == 5      # rows 0-4
-    assert len(result[0]) == 5   # cols 0-4
 
 
 # ══════════════════════════════════════════════════════════════════════════════

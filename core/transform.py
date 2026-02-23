@@ -1,4 +1,3 @@
-\
 from __future__ import annotations
 
 from typing import List, Any
@@ -42,8 +41,8 @@ def apply_column_selection(
 
 def shape_pack(rows: List[List[Any]]) -> List[List[Any]]:
     """
-    Pack mode assumes rows/columns already selected.
-    Simply returns rows (already tightly shaped).
+    Pack mode: rows already have columns compacted by apply_column_selection.
+    Simply return rows — already a dense rectangle with no gaps.
     """
     return rows
 
@@ -54,10 +53,17 @@ def shape_keep(
     selected_col_indices: List[int],
 ) -> List[List[Any]]:
     """
-    Keep original spacing relative to selected rows/columns.
-    Output is a rectangular bounding box from:
-      min_row -> max_row
-      min_col -> max_col
+    Keep Format: compress rows (no empty rows), but preserve column spacing.
+
+    Output rows = only the selected rows (no gaps between rows).
+    Output columns = full bounding box from min_col to max_col, with None
+    in positions that were not selected (column gaps preserved).
+
+    Example: source columns A,B,C,D,E with C,E selected (indices 2,4):
+      - min_col=2, max_col=4 → output width = 3 (C, D, E)
+      - output[r][0] = source col C, output[r][1] = None (D gap),
+        output[r][2] = source col E
+      - One output row per selected row; no empty rows.
     """
     if not original_rows:
         return []
@@ -66,24 +72,22 @@ def shape_keep(
         selected_row_indices = list(range(len(original_rows)))
 
     if not selected_col_indices:
-        # keep full width
         selected_col_indices = list(range(len(original_rows[0])))
 
-    min_r = min(selected_row_indices)
-    max_r = max(selected_row_indices)
     min_c = min(selected_col_indices)
     max_c = max(selected_col_indices)
+    col_set = set(selected_col_indices)
 
     shaped = []
 
-    for r in range(min_r, max_r + 1):
+    for r in selected_row_indices:
+        if r >= len(original_rows):
+            continue
         row = []
         for c in range(min_c, max_c + 1):
-            if r in selected_row_indices and c in selected_col_indices:
-                if r < len(original_rows) and c < len(original_rows[r]):
-                    row.append(original_rows[r][c])
-                else:
-                    row.append(None)
+            if c in col_set:
+                src_row = original_rows[r]
+                row.append(src_row[c] if c < len(src_row) else None)
             else:
                 row.append(None)
         shaped.append(row)

@@ -11,7 +11,7 @@ from core.project import ProjectConfig, SourceConfig, RecipeConfig
 from core.models import SheetConfig, Destination, Rule
 from core import templates as tpl
 from core.engine import run_all as engine_run_all, run_sheet as engine_run_sheet
-from core.errors import AppError
+from core.errors import AppError, friendly_message
 from core.autosave import resolve_autosave_path, save_project_atomic, load_project_if_exists
 
 
@@ -775,9 +775,10 @@ class TurboExtractorApp(tk.Tk):
         for r in report.results:
             label = f"{r.recipe_name} / {r.sheet_name}"
             if getattr(r, "error_code", None):
-                lines.append(f"{label}: ERROR {r.error_code} - {r.error_message}")
+                err = AppError(r.error_code, r.error_message or "", r.error_details)
+                lines.append(f"{label}:\n  ERROR: {friendly_message(err)}")
             else:
-                lines.append(f"{label}: {r.rows_written} rows")
+                lines.append(f"{label}: {r.rows_written} rows written")
         return "\n".join(lines) if lines else "No work items."
 
     def run_all(self) -> None:
@@ -819,7 +820,7 @@ class TurboExtractorApp(tk.Tk):
                 error_details=e.details,
             )
             self._feedback_progress_callback("error", err_res)
-            messagebox.showerror("Run failed", f"{e.code}: {e.message}")
+            messagebox.showerror("Run failed", friendly_message(e))
 
     def _show_scrollable_report_dialog(self, title: str, text: str) -> None:
         if getattr(self, "_report_dialog", None) is not None:

@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import Workbook
 
-from .errors import AppError
+from .errors import AppError, FILE_LOCKED, SAVE_FAILED
 from .models import SheetConfig, SheetResult, RunReport
 from .runner import run_sheet
 
@@ -89,7 +89,12 @@ def run_all(
         if dest_path and dest_path in wb_cache:
             try:
                 wb_cache[dest_path].save(dest_path)
-            except Exception as save_err:
+            except PermissionError:
+                err = AppError(
+                    FILE_LOCKED,
+                    f"Destination file is open in another program: {dest_path}",
+                    {"path": dest_path},
+                )
                 result = SheetResult(
                     source_path=source_path,
                     recipe_name=recipe_name,
@@ -97,9 +102,32 @@ def run_all(
                     dest_file=dest_path,
                     dest_sheet=sheet_cfg.destination.sheet_name,
                     rows_written=0,
-                    message=f"Save failed: {save_err}",
-                    error_code="SAVE_FAILED",
-                    error_message=str(save_err),
+                    message=str(err),
+                    error_code=err.code,
+                    error_message=err.message,
+                    error_details=err.details,
+                )
+                results.append(result)
+                _emit("error", result)
+                ok = False
+                break
+            except Exception as save_err:
+                err = AppError(
+                    SAVE_FAILED,
+                    str(save_err),
+                    {"path": dest_path},
+                )
+                result = SheetResult(
+                    source_path=source_path,
+                    recipe_name=recipe_name,
+                    sheet_name=sheet_cfg.name,
+                    dest_file=dest_path,
+                    dest_sheet=sheet_cfg.destination.sheet_name,
+                    rows_written=0,
+                    message=str(err),
+                    error_code=err.code,
+                    error_message=err.message,
+                    error_details=err.details,
                 )
                 results.append(result)
                 _emit("error", result)

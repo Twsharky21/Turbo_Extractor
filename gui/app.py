@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from typing import Optional
 
 from gui.ui_build import build_ui
-from gui.mixins import ReportMixin, TreeMixin, EditorMixin
+from gui.mixins import ReportMixin, TreeMixin, EditorMixin, ThrobberMixin
 
 from core.project import ProjectConfig, SourceConfig, RecipeConfig
 from core.models import SheetConfig, Destination, Rule
@@ -16,14 +17,15 @@ from core.errors import AppError, friendly_message
 from core.autosave import resolve_autosave_path, save_project_atomic, load_project_if_exists
 
 
-class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, tk.Tk):
+class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, ThrobberMixin, tk.Tk):
     """
     V3 GUI (merged): Tree structure + minimal sheet editor + rules UI.
 
     Logic is split across focused mixin modules:
-      - gui/mixins/report_mixin.py  – report formatting & dialog
-      - gui/mixins/tree_mixin.py    – tree widget operations
-      - gui/mixins/editor_mixin.py  – sheet editor & rules UI
+      - gui/mixins/report_mixin.py   – report formatting & dialog
+      - gui/mixins/tree_mixin.py     – tree widget operations
+      - gui/mixins/editor_mixin.py   – sheet editor & rules UI
+      - gui/mixins/throbber_mixin.py – animated spinner widget
 
     This class contains only the orchestration core: init, autosave,
     project-level add/remove, run, context-menu template actions,
@@ -287,8 +289,7 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, tk.Tk):
     # ── Feedback / progress ───────────────────────────────────────────────────
 
     def _feedback_clear(self) -> None:
-        if hasattr(self, "status_var"):
-            self.status_var.set("Running...")
+        self.throbber_start()
 
     def _feedback_key(self, source_path: str, recipe_name: str, sheet_name: str) -> str:
         base = os.path.basename(source_path)
@@ -321,60 +322,83 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, tk.Tk):
         except Exception:
             return
 
-    # ── Run ───────────────────────────────────────────────────────────────────
+    # ── Run (threaded) ────────────────────────────────────────────────────────
+
+    def _safe_after(self, ms, func, *args) -> None:
+        """Schedule func on the main thread, silently ignoring destroyed Tk."""
+        try:
+            self.after(ms, func, *args)
+        except RuntimeError:
+            pass  # Tk root already destroyed (e.g. during tests)
+
+    def _run_finished(self, report) -> None:
+        """Called on the main thread after a background run completes."""
+        try:
+            self.throbber_stop()
+            title = "Run complete" if report.ok else "Run complete (with errors)"
+            self._show_scrollable_report_dialog(title, self._format_run_report(report))
+        except Exception:
+            pass  # Tk root may be destroyed during tests
 
     def run_all(self) -> None:
         items = self.project.build_run_items()
         self._feedback_clear()
-        try:
-            report = engine_run_all(items, on_progress=self._feedback_progress_callback)
-        except TypeError:
-            report = engine_run_all(items)
+
+        def _work():
             try:
-                for r in getattr(report, "results", []) or []:
-                    self._feedback_progress_callback("result", r)
-            except Exception:
-                pass
-        title = "Run complete" if report.ok else "Run complete (with errors)"
-        self._show_scrollable_report_dialog(title, self._format_run_report(report))
+                report = engine_run_all(items, on_progress=self._feedback_progress_callback)
+            except TypeError:
+                report = engine_run_all(items)
+                try:
+                    for r in getattr(report, "results", []) or []:
+                        self._feedback_progress_callback("result", r)
+                except Exception:
+                    pass
+            self._safe_after(0, self._run_finished, report)
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def run_selected_sheet(self) -> None:
         if not self.current_sheet or not self.current_source_path or not self.current_recipe_name:
             messagebox.showwarning("Select Sheet", "Select a Sheet to run.")
             return
+
+        source_path = self.current_source_path
+        sheet_cfg = self.current_sheet
+        recipe_name = self.current_recipe_name
+
         self._feedback_clear()
-        try:
-            res = engine_run_sheet(
-                self.current_source_path,
-                self.current_sheet,
-                recipe_name=self.current_recipe_name,
-            )
-            self._feedback_progress_callback("result", res)
-            from core.models import RunReport as _RunReport
-            _mini = _RunReport(ok=True, results=[res])
-            self._show_scrollable_report_dialog(
-                "Run complete", self._format_run_report(_mini)
-            )
-        except AppError as e:
-            from core.models import SheetResult
-            err_res = SheetResult(
-                source_path=self.current_source_path,
-                recipe_name=self.current_recipe_name,
-                sheet_name=self.current_sheet.name,
-                dest_file=self.current_sheet.destination.file_path,
-                dest_sheet=self.current_sheet.destination.sheet_name,
-                rows_written=0,
-                message="ERROR",
-                error_code=e.code,
-                error_message=e.message,
-                error_details=e.details,
-            )
-            self._feedback_progress_callback("error", err_res)
-            from core.models import RunReport as _RunReport
-            _mini = _RunReport(ok=False, results=[err_res])
-            self._show_scrollable_report_dialog(
-                "Run failed", self._format_run_report(_mini)
-            )
+
+        def _work():
+            try:
+                res = engine_run_sheet(
+                    source_path,
+                    sheet_cfg,
+                    recipe_name=recipe_name,
+                )
+                self._feedback_progress_callback("result", res)
+                from core.models import RunReport as _RunReport
+                _mini = _RunReport(ok=True, results=[res])
+                self._safe_after(0, self._run_finished, _mini)
+            except AppError as e:
+                from core.models import SheetResult, RunReport as _RunReport
+                err_res = SheetResult(
+                    source_path=source_path,
+                    recipe_name=recipe_name,
+                    sheet_name=sheet_cfg.name,
+                    dest_file=sheet_cfg.destination.file_path,
+                    dest_sheet=sheet_cfg.destination.sheet_name,
+                    rows_written=0,
+                    message="ERROR",
+                    error_code=e.code,
+                    error_message=e.message,
+                    error_details=e.details,
+                )
+                self._feedback_progress_callback("error", err_res)
+                _mini = _RunReport(ok=False, results=[err_res])
+                self._safe_after(0, self._run_finished, _mini)
+
+        threading.Thread(target=_work, daemon=True).start()
 
 
 def main() -> None:

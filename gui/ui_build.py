@@ -4,6 +4,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional
 
+from gui.mixins.throbber_mixin import Throbber
+
 # NOTE: GUI-only module. No business logic here.
 
 def build_ui(app) -> None:
@@ -226,14 +228,19 @@ def build_ui(app) -> None:
     ttk.Entry(start_frame, textvariable=app.start_row_var, width=10).grid(row=0, column=2, sticky="w")
     app.start_row_var.trace_add("write", app._push_editor_to_sheet)
 
-    # ----- BOTTOM: STATUS + RUN BUTTONS (row 4) -----
+    # ----- BOTTOM: THROBBER + RUN BUTTONS (row 4) -----
     bottom = ttk.Frame(right)
     bottom.grid(row=4, column=0, sticky="ew", pady=(10, 0))
     bottom.columnconfigure(0, weight=1)
 
-    app.status_var = tk.StringVar(value="Idle")
-    ttk.Label(bottom, textvariable=app.status_var).grid(row=0, column=0, sticky="w")
+    # Throbber spinner — left side
+    app.throbber = Throbber(bottom)
+    app.throbber.grid(row=0, column=0, sticky="w")
 
+    # Hidden status_var kept for backward compat with tests that reference it
+    app.status_var = tk.StringVar(value="")
+
+    # Run buttons — right side
     run_btns = ttk.Frame(bottom)
     run_btns.grid(row=0, column=1, sticky="e")
 

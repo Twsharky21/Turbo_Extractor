@@ -776,7 +776,11 @@ class TurboExtractorApp(tk.Tk):
             label = f"{r.recipe_name} / {r.sheet_name}"
             if getattr(r, "error_code", None):
                 err = AppError(r.error_code, r.error_message or "", r.error_details)
-                lines.append(f"{label}:\n  ERROR: {friendly_message(err)}")
+                friendly = friendly_message(err)
+                line = f"{label}:\n  ERROR [{r.error_code}]: {friendly}"
+                if r.error_message:
+                    line += f"\n  ({r.error_message})"
+                lines.append(line)
             else:
                 lines.append(f"{label}: {r.rows_written} rows written")
         return "\n".join(lines) if lines else "No work items."

@@ -240,6 +240,50 @@ def test_run_sheet_keep_non_adjacent_cols_preserves_gaps():
         assert ws2["B1"].value is None   # gap
         assert ws2["C1"].value == 1
 
+def test_run_sheet_keep_mode_rules_filter_rows():
+    """
+    Rules must filter rows in keep mode. shape_keep returns a bounding box,
+    so the filtered-out row becomes a None gap — but its data must not appear.
+    """
+    with TemporaryDirectory() as td:
+        src  = _make_xlsx(os.path.join(td, "src.xlsx"),
+                          data=[["keep",  "x", 1],
+                                ["drop",  "y", 2],
+                                ["keep",  "z", 3]])
+        dest = os.path.join(td, "dest.xlsx")
+        cfg  = SheetConfig(
+            name="Sheet1", workbook_sheet="Sheet1",
+            columns_spec="A,C", rows_spec="",
+            paste_mode="keep", rules_combine="AND",
+            rules=[Rule(mode="include", column="A",
+                        operator="equals", value="keep")],
+            destination=Destination(file_path=dest, sheet_name="Out",
+                                    start_col="A", start_row=""),
+        )
+        result = run_sheet(src, cfg)
+        ws2 = load_workbook(dest)["Out"]
+        # Collect all non-None values from col A
+        col_a = [ws2.cell(row=r, column=1).value for r in range(1, result.rows_written + 1)]
+        # "drop" must not appear anywhere — it was filtered by the rule
+        assert "drop" not in col_a
+        # Both "keep" values must be present
+        assert col_a.count("keep") == 2
+
+
+def test_run_sheet_pack_mode_rules_filter_rows():
+    """Sanity check: rules work in pack mode (regression guard)."""
+    with TemporaryDirectory() as td:
+        src  = _make_xlsx(os.path.join(td, "src.xlsx"),
+                          data=[["keep", 1], ["drop", 2], ["keep", 3]])
+        dest = os.path.join(td, "dest.xlsx")
+        cfg  = _cfg(dest, rules=[Rule(mode="include", column="A",
+                                      operator="equals", value="keep")])
+        result = run_sheet(src, cfg)
+        assert result.rows_written == 2
+        ws2 = _ws(dest)
+        assert ws2["A1"].value == "keep"
+        assert ws2["A2"].value == "keep"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DESTINATION SHEET MANAGEMENT

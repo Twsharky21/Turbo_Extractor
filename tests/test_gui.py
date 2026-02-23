@@ -141,6 +141,8 @@ def test_run_selected_sheet_calls_engine_with_current_context(monkeypatch):
                            rows_written=0, message="OK")
 
     monkeypatch.setattr(app, "engine_run_sheet", fake_run_sheet)
+    monkeypatch.setattr(app.messagebox, "showinfo",  lambda *a, **k: None)
+    monkeypatch.setattr(app.messagebox, "showerror", lambda *a, **k: None)
     monkeypatch.setattr(gui, "_show_scrollable_report_dialog", lambda *a, **k: None)
 
     gui.run_selected_sheet()

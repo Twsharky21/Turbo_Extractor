@@ -14,7 +14,7 @@ This module has NO knowledge of batch execution or progress callbacks.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
 
@@ -87,6 +87,17 @@ def _get_or_create_sheet(wb: Workbook, name: str):
     return ws
 
 
+def _apply_row_selection_indexed(
+    table: List[List[Any]],
+    row_indices: List[int],
+) -> List[Tuple[int, List[Any]]]:
+    """
+    Like apply_row_selection but returns (original_index, row) pairs.
+    This lets us track which absolute table indices survive rules filtering.
+    """
+    return [(i, table[i]) for i in row_indices if 0 <= i < len(table)]
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def run_sheet(
@@ -98,10 +109,21 @@ def run_sheet(
     """
     Execute a single sheet extraction.
 
-    _wb_cache: optional dict keyed by dest_path holding in-memory Workbook objects.
-               When provided (by batch.run_all), the workbook is NOT saved to disk
-               here — run_all manages saves after each item. When None (standalone
-               call), open, write, and save here.
+    Pipeline:
+      1. Load source table
+      2. Apply source start row offset
+      3. Apply row selection (rows_spec)
+      4. Apply rules filtering — runs on full-width rows, absolute source cols
+      5. Apply column selection
+      6. Shape (pack or keep)
+      7. Plan destination placement
+      8. Collision check + write
+
+    For keep mode, shape_keep receives only the post-rules absolute row indices
+    so that rules correctly exclude rows from the spatial output.
+
+    _wb_cache: optional dict keyed by dest_path. When provided (by batch.run_all),
+               the workbook is NOT saved here. When None (standalone), saves here.
     """
     table = _load_source_table(source_path, sheet_cfg.workbook_sheet)
     table = _apply_source_start_row(table, getattr(sheet_cfg, "source_start_row", ""))
@@ -109,24 +131,43 @@ def run_sheet(
     used_h, used_w = compute_used_range(table)
     table = normalize_table(table)
 
+    # Step 3 — row selection: produce (abs_index, row) pairs
     row_indices = parse_rows(sheet_cfg.rows_spec)
     if not row_indices:
         row_indices = list(range(used_h))
 
-    table_rows = apply_row_selection(table, row_indices)
-    table_rows = apply_rules(table_rows, sheet_cfg.rules, sheet_cfg.rules_combine)
+    indexed_rows = _apply_row_selection_indexed(table, row_indices)
+    # indexed_rows: [(abs_idx, row), ...]
 
+    # Step 4 — rules filtering on full-width rows
+    # Pass only the row values to apply_rules, then re-pair with indices.
+    rows_only = [row for _, row in indexed_rows]
+    filtered_rows = apply_rules(rows_only, sheet_cfg.rules, sheet_cfg.rules_combine)
+
+    # Recover which absolute indices survived by walking indexed_rows in order.
+    # apply_rules preserves order and returns a strict subset, so we can
+    # consume filtered_rows sequentially while scanning indexed_rows.
+    survived_abs_indices: List[int] = []
+    filt_pos = 0
+    for abs_idx, row in indexed_rows:
+        if filt_pos < len(filtered_rows) and filtered_rows[filt_pos] is row:
+            survived_abs_indices.append(abs_idx)
+            filt_pos += 1
+
+    # Step 5 — column selection
     col_indices = parse_columns(sheet_cfg.columns_spec)
     if not col_indices:
         col_indices = list(range(used_w))
 
-    selected = apply_column_selection(table_rows, col_indices)
+    selected = apply_column_selection(filtered_rows, col_indices)
 
+    # Step 6 — shape
     if sheet_cfg.paste_mode == "keep":
-        shaped = shape_keep(table, row_indices, col_indices)
+        shaped = shape_keep(table, survived_abs_indices, col_indices)
     else:
         shaped = shape_pack(selected)
 
+    # Steps 7–8 — plan, collision check, write
     dest_path = sheet_cfg.destination.file_path
     standalone = _wb_cache is None
 

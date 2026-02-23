@@ -185,7 +185,6 @@ class TurboExtractorApp(tk.Tk):
             pass
         if is_sheet:
             try:
-                # Sheet: hide the name-only header, show full editor
                 self.selection_box.grid_remove()
                 self.sheet_box.grid(row=1, column=0, sticky="ew")
                 self.rules_box.grid(row=2, column=0, sticky="nsew")
@@ -194,7 +193,6 @@ class TurboExtractorApp(tk.Tk):
                 pass
         else:
             try:
-                # Source/Recipe: show name-only header, hide editor panels
                 self.selection_box.grid(row=0, column=0, sticky="ew")
                 self.sheet_box.grid_remove()
                 self.rules_box.grid_remove()
@@ -632,7 +630,6 @@ class TurboExtractorApp(tk.Tk):
 
         source = self.project.sources[path[0]]
 
-        # Source selected: add under first recipe (create if missing)
         auto_created_recipe = False
         if len(path) == 1:
             if not source.recipes:
@@ -640,19 +637,14 @@ class TurboExtractorApp(tk.Tk):
                 auto_created_recipe = True
             recipe = source.recipes[0]
         else:
-            # Recipe selected or Sheet selected -> parent recipe
             recipe = source.recipes[path[1]]
 
-        # Name contract: all new sheets are "sheet1" and duplicates are allowed.
         new_sheet = self._make_default_sheet(name="sheet1")
         recipe.sheets.append(new_sheet)
 
         if auto_created_recipe:
-            # Recipe node didn't exist in tree yet — full refresh required.
-            # Incremental insert would fail: r_children would be empty tuple.
             self.refresh_tree()
         else:
-            # Incremental insert keeps pre-captured item IDs valid.
             src_children = self.tree.get_children("")
             s_id = src_children[path[0]]
             recipe_idx = path[1] if len(path) >= 2 else 0
@@ -689,7 +681,6 @@ class TurboExtractorApp(tk.Tk):
         self._reselect_after_remove(path)
 
     def _reselect_after_remove(self, removed_path: list) -> None:
-        """After deletion, select the nearest sibling or parent that still exists."""
         depth = len(removed_path)
         removed_idx = removed_path[-1]
 
@@ -770,20 +761,78 @@ class TurboExtractorApp(tk.Tk):
         except Exception:
             return
 
+    # ── Report formatting ─────────────────────────────────────────────────────
+
     def _format_run_report(self, report) -> str:
+        """
+        Rich structured run report as plain text.
+
+        All test-asserted tokens preserved:
+          recipe_name, sheet_name, row count, "ERROR", error_code,
+          raw error_message, "No work items." for empty results.
+        """
+        import datetime as _dt
+        import os as _os
+
+        _SEP_HDR = "\u2550" * 72
+        _SEP     = "\u2500" * 72
+
+        results = getattr(report, "results", []) or []
+        if not results:
+            return "No work items."
+
+        n_total = len(results)
+        n_ok    = sum(1 for r in results if not getattr(r, "error_code", None))
+        n_err   = n_total - n_ok
+        ts      = _dt.datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+
         lines = []
-        for r in report.results:
-            label = f"{r.recipe_name} / {r.sheet_name}"
-            if getattr(r, "error_code", None):
-                err = AppError(r.error_code, r.error_message or "", r.error_details)
-                friendly = friendly_message(err)
-                line = f"{label}:\n  ERROR [{r.error_code}]: {friendly}"
-                if r.error_message:
-                    line += f"\n  ({r.error_message})"
-                lines.append(line)
+        lines.append(_SEP_HDR)
+        lines.append("  TURBO EXTRACTOR  \u2014  Run Summary")
+        lines.append(f"  {ts}    {n_total} item(s)    {n_ok} ok  /  {n_err} error(s)")
+        lines.append(_SEP_HDR)
+
+        for idx, r in enumerate(results):
+            if idx > 0:
+                lines.append(_SEP)
+
+            recipe   = getattr(r, "recipe_name",   "") or ""
+            sheet    = getattr(r, "sheet_name",    "") or ""
+            src_path = getattr(r, "source_path",   "") or ""
+            dest_f   = getattr(r, "dest_file",     "") or ""
+            dest_s   = getattr(r, "dest_sheet",    "") or ""
+            err_code = getattr(r, "error_code",    None)
+            err_msg  = getattr(r, "error_message", "") or ""
+            err_det  = getattr(r, "error_details", None)
+            rows     = getattr(r, "rows_written",  0)
+
+            label = f"{recipe} / {sheet}"
+
+            if err_code:
+                _err_obj  = AppError(err_code, err_msg, err_det)
+                _friendly = friendly_message(_err_obj)
+                lines.append(f"  \u2717  {label}   \u2014   ERROR [{err_code}]")
+                if src_path:
+                    lines.append(f"     Source : {_os.path.basename(src_path)}")
+                if dest_f or dest_s:
+                    lines.append(f"     Dest   : {_os.path.basename(dest_f)} \u2192 {dest_s}")
+                lines.append(f"     Reason : {_friendly}")
+                if err_msg:
+                    lines.append(f"     Detail : ({err_msg})")
             else:
-                lines.append(f"{label}: {r.rows_written} rows written")
-        return "\n".join(lines) if lines else "No work items."
+                row_word = "row" if rows == 1 else "rows"
+                lines.append(f"  \u2713  {label}   \u2014   {rows} {row_word} written")
+                if src_path:
+                    lines.append(f"     Source : {_os.path.basename(src_path)}")
+                if dest_f or dest_s:
+                    lines.append(f"     Dest   : {_os.path.basename(dest_f)} \u2192 {dest_s}")
+
+        lines.append(_SEP_HDR)
+        status_word = "complete" if n_err == 0 else "complete  (with errors)"
+        lines.append(f"  DONE  \u2014  {n_total} item(s) {status_word}")
+        lines.append(_SEP_HDR)
+
+        return "\n".join(lines)
 
     def run_all(self) -> None:
         items = self.project.build_run_items()
@@ -808,7 +857,11 @@ class TurboExtractorApp(tk.Tk):
         try:
             res = engine_run_sheet(self.current_source_path, self.current_sheet, recipe_name=self.current_recipe_name)
             self._feedback_progress_callback("result", res)
-            messagebox.showinfo("Run complete", f"{res.recipe_name} / {res.sheet_name}: {res.rows_written} rows")
+            from core.models import RunReport as _RunReport
+            _mini = _RunReport(ok=True, results=[res])
+            self._show_scrollable_report_dialog(
+                "Run complete", self._format_run_report(_mini)
+            )
         except AppError as e:
             from core.models import SheetResult
             err_res = SheetResult(
@@ -824,7 +877,39 @@ class TurboExtractorApp(tk.Tk):
                 error_details=e.details,
             )
             self._feedback_progress_callback("error", err_res)
-            messagebox.showerror("Run failed", friendly_message(e))
+            from core.models import RunReport as _RunReport
+            _mini = _RunReport(ok=False, results=[err_res])
+            self._show_scrollable_report_dialog(
+                "Run failed", self._format_run_report(_mini)
+            )
+
+    # ── Report dialog helpers ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _classify_report_line(line: str) -> str:
+        """Return a text-tag name based on line content."""
+        s = line.strip()
+        if not s:
+            return "plain"
+        if s[0] in ("\u2550", "\u2500") or s.startswith("TURBO") or s.startswith("DONE"):
+            return "hdr"
+        if s.startswith("\u2713"):
+            return "ok_line"
+        if s.startswith("\u2717"):
+            return "err_line"
+        if s.startswith(("Source", "Dest", "Reason", "Detail")):
+            return "meta"
+        return "plain"
+
+    @staticmethod
+    def _report_font(bold: bool = False):
+        """Return best monospace font tuple available."""
+        try:
+            import tkinter.font as _tkf
+            name = "Consolas" if "Consolas" in _tkf.families() else "Courier"
+        except Exception:
+            name = "Courier"
+        return (name, 9, "bold" if bold else "normal")
 
     def _show_scrollable_report_dialog(self, title: str, text: str) -> None:
         if getattr(self, "_report_dialog", None) is not None:
@@ -839,6 +924,7 @@ class TurboExtractorApp(tk.Tk):
         win.title(title)
         win.transient(self)
         win.grab_set()
+        win.minsize(740, 440)
 
         container = ttk.Frame(win, padding=10)
         container.grid(row=0, column=0, sticky="nsew")
@@ -847,19 +933,46 @@ class TurboExtractorApp(tk.Tk):
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
 
-        txt = tk.Text(container, wrap="word", height=22, width=90)
-        vsb = ttk.Scrollbar(container, orient="vertical", command=txt.yview)
-        txt.configure(yscrollcommand=vsb.set)
+        txt = tk.Text(
+            container,
+            wrap="none",
+            height=24,
+            width=92,
+            font=self._report_font(),
+            borderwidth=1,
+            relief="sunken",
+            padx=8,
+            pady=6,
+        )
+        vsb = ttk.Scrollbar(container, orient="vertical",   command=txt.yview)
+        hsb = ttk.Scrollbar(container, orient="horizontal", command=txt.xview)
+        txt.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         txt.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        txt.tag_configure("hdr",      foreground="#1a3a6b", font=self._report_font(bold=True))
+        txt.tag_configure("ok_line",  foreground="#1a6b1a", font=self._report_font(bold=True))
+        txt.tag_configure("err_line", foreground="#8b0000", font=self._report_font(bold=True))
+        txt.tag_configure("meta",     foreground="#555555", font=self._report_font())
+        txt.tag_configure("plain",    foreground="#111111", font=self._report_font())
+
+        for line in text.splitlines():
+            txt.insert("end", line + "\n", self._classify_report_line(line))
+
+        txt.configure(state="disabled")
 
         btn_row = ttk.Frame(container)
-        btn_row.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        close_btn = ttk.Button(btn_row, text="Close", command=win.destroy)
-        close_btn.grid(row=0, column=0, sticky="e")
+        btn_row.grid(row=2, column=0, columnspan=2, sticky="e", pady=(8, 0))
 
-        txt.insert("1.0", text or "")
-        txt.configure(state="disabled")
+        def _copy_to_clipboard():
+            win.clipboard_clear()
+            win.clipboard_append(text)
+
+        ttk.Button(btn_row, text="Copy to Clipboard",
+                   command=_copy_to_clipboard).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Close",
+                   command=win.destroy).pack(side="left")
 
         win.update_idletasks()
         w = win.winfo_width()
@@ -869,11 +982,6 @@ class TurboExtractorApp(tk.Tk):
         x = max(0, int((sw - w) / 2))
         y = max(0, int((sh - h) / 2))
         win.geometry(f"{w}x{h}+{x}+{y}")
-
-        try:
-            close_btn.focus_set()
-        except Exception:
-            pass
 
     def _make_default_sheet(self, name: str) -> SheetConfig:
         return SheetConfig(

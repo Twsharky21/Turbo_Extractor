@@ -195,7 +195,7 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, ThrobberMixin, tk.T
             if default_template:
                 tpl.apply_template_to_source(src, default_template)
             else:
-                sheet = self._make_default_sheet(name="sheet1")
+                sheet = self._make_default_sheet(name="Sheet1")
                 recipe = RecipeConfig(name="Recipe1", sheets=[sheet])
                 src.recipes = [recipe]
             self.project.sources.append(src)
@@ -245,7 +245,7 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, ThrobberMixin, tk.T
         else:
             recipe = source.recipes[path[1]]
 
-        new_sheet = self._make_default_sheet(name="sheet1")
+        new_sheet = self._make_default_sheet(name="Sheet1")
         recipe.sheets.append(new_sheet)
 
         if auto_created_recipe:

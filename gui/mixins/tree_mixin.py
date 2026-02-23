@@ -216,8 +216,8 @@ class TreeMixin:
 
         current_text = self.tree.item(item_id, "text")
 
-        var = tk.StringVar(value=current_text)
-        entry = tk.ttk.Entry(self.tree, textvariable=var)
+        entry = tk.ttk.Entry(self.tree)
+        entry.insert(0, current_text)
         entry.place(x=x, y=y, width=max(w, 80), height=h)
 
         self._rename_entry = entry
@@ -226,6 +226,7 @@ class TreeMixin:
         self._rename_kind = kind
 
         entry.focus_set()
+        entry.select_range(0, "end")
         entry.icursor("end")
 
         entry.bind("<Return>", lambda e: self._commit_inline_rename())
@@ -242,6 +243,7 @@ class TreeMixin:
         self._rename_item_id = None
         self._rename_path = None
         self._rename_kind = None
+        self._rename_var = None
 
     def _commit_inline_rename(self) -> None:
         if self._rename_entry is None or self._rename_path is None or self._rename_kind is None:

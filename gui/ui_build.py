@@ -30,6 +30,13 @@ def build_ui(app) -> None:
             background=[("active", "#1e6bd6"), ("!disabled", "#1f76ff")],
             foreground=[("!disabled", "white")],
         )
+        # Lighter blue for Add Recipe / Add Sheet
+        style.configure("LightAccent.TButton", padding=(8, 4))
+        style.map(
+            "LightAccent.TButton",
+            background=[("active", "#5a9cf5"), ("!disabled", "#6baaff")],
+            foreground=[("!disabled", "white")],
+        )
         # White combobox: fieldbackground = the text area, selectbackground = selected item bg
         style.configure(
             "White.TCombobox",
@@ -59,8 +66,8 @@ def build_ui(app) -> None:
     move_frame.grid(row=0, column=1, padx=(0, 6))
     ttk.Button(move_frame, text="MOVE ▲", width=8, command=app.move_selected_up).grid(row=0, column=0, sticky="ew")
     ttk.Button(move_frame, text="MOVE ▼", width=8, command=app.move_selected_down).grid(row=1, column=0, sticky="ew", pady=(2, 0))
-    ttk.Button(topbar, text="Add Recipe", command=app.add_recipe).grid(row=0, column=2, padx=(0, 6))
-    ttk.Button(topbar, text="Add Sheet", command=app.add_sheet).grid(row=0, column=3, padx=(0, 6))
+    ttk.Button(topbar, text="Add Recipe", style="LightAccent.TButton", command=app.add_recipe).grid(row=0, column=2, padx=(0, 6))
+    ttk.Button(topbar, text="Add Sheet", style="LightAccent.TButton", command=app.add_sheet).grid(row=0, column=3, padx=(0, 6))
     ttk.Button(topbar, text="Remove Selected", command=app.remove_selected).grid(row=0, column=4, padx=(0, 6))
 
     # ----- LEFT: TREE -----
@@ -92,7 +99,7 @@ def build_ui(app) -> None:
     ttk.Label(app.selection_box, textvariable=app.selection_name_var).grid(row=0, column=0, sticky="w")
 
     # ----- Selected Sheet (row 1) -----
-    app.sheet_box = ttk.LabelFrame(right, text="Selected Sheet (within Recipe)", padding=10)
+    app.sheet_box = ttk.LabelFrame(right, text="Selected Sheet", padding=10)
     app.sheet_box.grid(row=1, column=0, sticky="ew")
     app.sheet_box.columnconfigure(1, weight=1)
 
@@ -115,8 +122,8 @@ def build_ui(app) -> None:
     # Source Start Row removed — keep hidden var for model compat
     app.source_start_row_var = tk.StringVar()
 
-    # Column paste mode (row 2) — white combobox
-    ttk.Label(app.sheet_box, text="Column paste mode:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    # Column Paste Mode (row 2) — white combobox
+    ttk.Label(app.sheet_box, text="Column Paste Mode:").grid(row=2, column=0, sticky="w", pady=(6, 0))
     app.paste_var = tk.StringVar()
     app.paste_combo = ttk.Combobox(
         app.sheet_box,
@@ -139,7 +146,7 @@ def build_ui(app) -> None:
     top_rules.grid(row=0, column=0, sticky="ew")
     top_rules.columnconfigure(1, weight=1)
 
-    ttk.Label(top_rules, text="Rules combine:").grid(row=0, column=0, sticky="w")
+    ttk.Label(top_rules, text="Rules Combine:").grid(row=0, column=0, sticky="w")
     app.combine_var = tk.StringVar()
     app.combine_combo = ttk.Combobox(
         top_rules,
@@ -152,15 +159,15 @@ def build_ui(app) -> None:
     app.combine_combo.grid(row=0, column=1, sticky="w", padx=(10, 0))
     app.combine_combo.bind("<<ComboboxSelected>>", app._push_editor_to_sheet)
 
-    ttk.Button(top_rules, text="+ Add rule", command=app.add_rule).grid(row=0, column=2, sticky="w", padx=(20, 0))
+    ttk.Button(top_rules, text="+ Add Rule", command=app.add_rule).grid(row=0, column=2, sticky="w", padx=(20, 0))
 
-    # Header row — column minsizes match widget widths in each rule row
+    # Header row — column layout must match rule rows exactly
     hdr = ttk.Frame(app.rules_box)
     hdr.grid(row=1, column=0, sticky="ew", pady=(8, 4))
-    hdr.columnconfigure(0, minsize=112)   # Include/Exclude combo (width=13)
-    hdr.columnconfigure(1, minsize=58)    # Column entry (width=6)
-    hdr.columnconfigure(2, minsize=90)    # Operator combo (width=10)
-    hdr.columnconfigure(3, weight=1)      # Value stretches
+    hdr.columnconfigure(0, minsize=100)
+    hdr.columnconfigure(1, minsize=64)
+    hdr.columnconfigure(2, minsize=112)
+    hdr.columnconfigure(3, weight=1)
     ttk.Label(hdr, text="Include/Exclude").grid(row=0, column=0, sticky="w")
     ttk.Label(hdr, text="Column").grid(row=0, column=1, sticky="w", padx=(6, 0))
     ttk.Label(hdr, text="Operator").grid(row=0, column=2, sticky="w", padx=(6, 0))
@@ -180,6 +187,7 @@ def build_ui(app) -> None:
     app.rules_canvas.configure(yscrollcommand=rules_scroll.set)
 
     app.rules_frame = tk.Frame(app.rules_canvas, background="white")
+    app.rules_frame.columnconfigure(0, weight=1)
     app.rules_canvas.create_window((0, 0), window=app.rules_frame, anchor="nw")
 
     def _on_rules_canvas_resize(event):
@@ -204,12 +212,12 @@ def build_ui(app) -> None:
     ttk.Button(app.dest_box, text="Browse", command=app.browse_destination).grid(row=0, column=2, sticky="ew")
     app.dest_file_var.trace_add("write", app._push_editor_to_sheet)
 
-    ttk.Label(app.dest_box, text="Sheet name:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    ttk.Label(app.dest_box, text="Sheet Name:").grid(row=1, column=0, sticky="w", pady=(6, 0))
     app.dest_sheet_var = tk.StringVar()
     ttk.Entry(app.dest_box, textvariable=app.dest_sheet_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(10, 0), pady=(6, 0))
     app.dest_sheet_var.trace_add("write", app._push_editor_to_sheet)
 
-    ttk.Label(app.dest_box, text="Start column (e.g., A, D, AA):").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    ttk.Label(app.dest_box, text="Start Column (e.g., A, D, AA):").grid(row=2, column=0, sticky="w", pady=(6, 0))
     start_frame = ttk.Frame(app.dest_box)
     start_frame.grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=(6, 0))
 
@@ -223,7 +231,7 @@ def build_ui(app) -> None:
             app.start_col_var.set(up)
     app.start_col_var.trace_add("write", _cap_start_col)
 
-    ttk.Label(start_frame, text="Start row:").grid(row=0, column=1, sticky="w", padx=(15, 6))
+    ttk.Label(start_frame, text="Start Row:").grid(row=0, column=1, sticky="w", padx=(15, 6))
     app.start_row_var = tk.StringVar()
     ttk.Entry(start_frame, textvariable=app.start_row_var, width=10).grid(row=0, column=2, sticky="w")
     app.start_row_var.trace_add("write", app._push_editor_to_sheet)

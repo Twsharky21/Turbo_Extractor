@@ -34,7 +34,8 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, ThrobberMixin, tk.T
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Excel Turbo Extractor V3")
+        self.title("Turbo Extractor")
+        self._set_icon()
         self.minsize(1100, 700)
 
         self.project: ProjectConfig = ProjectConfig()
@@ -60,6 +61,23 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, ThrobberMixin, tk.T
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── UI construction ───────────────────────────────────────────────────────
+
+    def _set_icon(self) -> None:
+        """Set the window icon if the .ico file is found next to the script or project root."""
+        icon_name = "excel_turbo_extractor_yellow_x.ico"
+        try:
+            import pathlib
+            candidates = [
+                pathlib.Path(__file__).resolve().parent.parent / icon_name,
+                pathlib.Path(__file__).resolve().parent / icon_name,
+                pathlib.Path.cwd() / icon_name,
+            ]
+            for p in candidates:
+                if p.exists():
+                    self.iconbitmap(str(p))
+                    return
+        except Exception:
+            pass
 
     def _build_ui(self) -> None:
         build_ui(self)
@@ -168,6 +186,7 @@ class TurboExtractorApp(ReportMixin, TreeMixin, EditorMixin, ThrobberMixin, tk.T
             title="Select destination XLSX",
             defaultextension=".xlsx",
             filetypes=[("Excel Workbook", "*.xlsx")],
+            confirmoverwrite=False,
         )
         if not path:
             return

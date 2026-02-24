@@ -124,31 +124,54 @@ class EditorMixin:
     def _build_rule_row(self, idx: int, rule: Rule) -> None:
         row = ttk.Frame(self.rules_frame)
         row.grid(row=idx, column=0, sticky="ew", pady=2)
+        row.columnconfigure(0, minsize=100)
+        row.columnconfigure(1, minsize=64)
+        row.columnconfigure(2, minsize=112)
         row.columnconfigure(3, weight=1)
 
-        mode_var = tk.StringVar(value=rule.mode)
+        # Display capitalized values; model stores lowercase
+        mode_display = rule.mode.capitalize()
+        op_display = rule.operator.capitalize() if rule.operator in ("equals", "contains") else rule.operator
+
+        mode_var = tk.StringVar(value=mode_display)
         col_var  = tk.StringVar(value=rule.column)
-        op_var   = tk.StringVar(value=rule.operator)
+        op_var   = tk.StringVar(value=op_display)
         val_var  = tk.StringVar(value=rule.value)
 
-        ttk.Combobox(row, textvariable=mode_var, values=["include", "exclude"],
-                     state="readonly", width=9).grid(row=0, column=0)
-        ttk.Entry(row, textvariable=col_var, width=6).grid(row=0, column=1, padx=(6, 0))
-        ttk.Combobox(row, textvariable=op_var, values=["equals", "contains", "<", ">"],
-                     state="readonly", width=10).grid(row=0, column=2, padx=(6, 0))
+        ttk.Combobox(row, textvariable=mode_var, values=["Include", "Exclude"],
+                     state="readonly", style="White.TCombobox", width=9).grid(row=0, column=0, sticky="w")
+        col_entry = ttk.Entry(row, textvariable=col_var, width=6)
+        col_entry.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Combobox(row, textvariable=op_var, values=["Equals", "Contains", "<", ">"],
+                     state="readonly", style="White.TCombobox", width=10).grid(row=0, column=2, sticky="w", padx=(6, 0))
         ttk.Entry(row, textvariable=val_var).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
         ttk.Button(row, text="X", command=lambda i=idx: self._remove_rule(i),
                    width=3).grid(row=0, column=4, padx=(6, 0))
 
+        # Auto-capitalize column letters
+        def _cap_rule_col(*_):
+            v = col_var.get()
+            up = v.upper()
+            if v != up:
+                col_var.set(up)
+
         def push(*_):
-            rule.mode     = mode_var.get()
+            # Map display values back to model (lowercase)
+            mode_val = mode_var.get().strip().lower()
+            if mode_val in ("include", "exclude"):
+                rule.mode = mode_val
+            op_val = op_var.get().strip()
+            if op_val.lower() in ("equals", "contains"):
+                rule.operator = op_val.lower()
+            else:
+                rule.operator = op_val
             rule.column   = col_var.get()
-            rule.operator = op_var.get()
             rule.value    = val_var.get()
             self._mark_dirty()
 
         mode_var.trace_add("write", push)
+        col_var.trace_add("write", _cap_rule_col)
         col_var.trace_add("write",  push)
         op_var.trace_add("write",   push)
         val_var.trace_add("write",  push)
@@ -161,7 +184,7 @@ class EditorMixin:
         if len(path) != 3:
             return
         sheet = self.project.sources[path[0]].recipes[path[1]].sheets[path[2]]
-        sheet.rules.append(Rule(mode="include", column="A", operator="equals", value=""))
+        sheet.rules.append(Rule(mode="include", column="A", operator="contains", value=""))
         self._rebuild_rules()
         self._mark_dirty()
 

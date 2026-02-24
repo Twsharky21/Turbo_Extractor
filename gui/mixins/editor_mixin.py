@@ -6,6 +6,29 @@ from tkinter import ttk
 from core.models import SheetConfig, Destination, Rule
 
 
+# ── Rule tooltip texts (used by ui_build.py for header labels) ────────────────
+
+_TIP_RULE_MODE = (
+    "Include: keep rows where the condition is true.\n"
+    "Exclude: remove rows where the condition is true."
+)
+_TIP_RULE_COL = (
+    "Source column letter to evaluate (e.g. A, B, AA).\n"
+    "Always refers to the original source column."
+)
+_TIP_RULE_OP = (
+    "Equals: exact match (case-insensitive, numeric-aware).\n"
+    "Contains: cell text includes the value (case-insensitive).\n"
+    "< / >: numeric comparison. Non-numeric cells are skipped."
+)
+_TIP_RULE_VAL = (
+    "The value to compare against.\n"
+    "For Contains, leave blank to match everything."
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class EditorMixin:
     """
     Mixin for TurboExtractorApp: right-panel sheet editor and rules UI.

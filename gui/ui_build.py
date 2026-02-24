@@ -5,8 +5,47 @@ from tkinter import ttk
 from typing import Optional
 
 from gui.mixins.throbber_mixin import Throbber
+from gui.tooltip import add_tooltip
 
 # NOTE: GUI-only module. No business logic here.
+
+# ── Tooltip texts ─────────────────────────────────────────────────────────────
+
+_TIP_COLUMNS = (
+    "Source columns to extract. Use letters like A, C, A-E, or A,C,G-Z.\n"
+    "Optional — leave blank to extract all columns."
+)
+_TIP_ROWS = (
+    "Source rows to extract. Use numbers like 1-3, 9-80, or 1,5,10.\n"
+    "Optional — leave blank to extract all rows."
+)
+_TIP_PASTE_MODE = (
+    "Pack Together: selected columns are pushed side-by-side with no gaps.\n"
+    "Keep Format: preserves original column spacing (gap columns stay as blanks)."
+)
+_TIP_COMBINE = (
+    "AND: a row must pass ALL rules to be kept.\n"
+    "OR: a row is kept if it passes ANY rule."
+)
+_TIP_DEST_FILE = (
+    "Path to the destination .xlsx file.\n"
+    "Required — a new file is created if it doesn't exist."
+)
+_TIP_DEST_SHEET = (
+    "Sheet name inside the destination workbook.\n"
+    "Created automatically if it doesn't exist."
+)
+_TIP_START_COL = (
+    "Destination column where output starts (e.g. A, D, AA).\n"
+    "Optional — defaults to A."
+)
+_TIP_START_ROW = (
+    "Destination row where output starts (e.g. 1, 10, 500).\n"
+    "Optional — leave blank to append after existing data."
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 def build_ui(app) -> None:
     # Overall layout: top toolbar, then left tree + right editor
@@ -103,7 +142,9 @@ def build_ui(app) -> None:
     app.sheet_box.grid(row=1, column=0, sticky="ew")
     app.sheet_box.columnconfigure(1, weight=1)
 
-    ttk.Label(app.sheet_box, text="Columns (e.g., A,C,AC-ZZ):").grid(row=0, column=0, sticky="w")
+    lbl_columns = ttk.Label(app.sheet_box, text="Columns (e.g., A,C,AC-ZZ):")
+    lbl_columns.grid(row=0, column=0, sticky="w")
+    add_tooltip(lbl_columns, _TIP_COLUMNS)
     app.columns_var = tk.StringVar()
     ttk.Entry(app.sheet_box, textvariable=app.columns_var).grid(row=0, column=1, sticky="ew", padx=(10, 0))
     app.columns_var.trace_add("write", app._push_editor_to_sheet)
@@ -114,7 +155,9 @@ def build_ui(app) -> None:
             app.columns_var.set(up)
     app.columns_var.trace_add("write", _cap_columns)
 
-    ttk.Label(app.sheet_box, text="Rows (e.g., 1-3,9-80,117):").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    lbl_rows = ttk.Label(app.sheet_box, text="Rows (e.g., 1-3,9-80,117):")
+    lbl_rows.grid(row=1, column=0, sticky="w", pady=(6, 0))
+    add_tooltip(lbl_rows, _TIP_ROWS)
     app.rows_var = tk.StringVar()
     ttk.Entry(app.sheet_box, textvariable=app.rows_var).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(6, 0))
     app.rows_var.trace_add("write", app._push_editor_to_sheet)
@@ -123,7 +166,9 @@ def build_ui(app) -> None:
     app.source_start_row_var = tk.StringVar()
 
     # Column Paste Mode (row 2) — white combobox
-    ttk.Label(app.sheet_box, text="Column Paste Mode:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    lbl_paste = ttk.Label(app.sheet_box, text="Column Paste Mode:")
+    lbl_paste.grid(row=2, column=0, sticky="w", pady=(6, 0))
+    add_tooltip(lbl_paste, _TIP_PASTE_MODE)
     app.paste_var = tk.StringVar()
     app.paste_combo = ttk.Combobox(
         app.sheet_box,
@@ -146,7 +191,9 @@ def build_ui(app) -> None:
     top_rules.grid(row=0, column=0, sticky="ew")
     top_rules.columnconfigure(1, weight=1)
 
-    ttk.Label(top_rules, text="Rules Combine:").grid(row=0, column=0, sticky="w")
+    lbl_combine = ttk.Label(top_rules, text="Rules Combine:")
+    lbl_combine.grid(row=0, column=0, sticky="w")
+    add_tooltip(lbl_combine, _TIP_COMBINE)
     app.combine_var = tk.StringVar()
     app.combine_combo = ttk.Combobox(
         top_rules,
@@ -168,10 +215,23 @@ def build_ui(app) -> None:
     hdr.columnconfigure(1, minsize=64)
     hdr.columnconfigure(2, minsize=112)
     hdr.columnconfigure(3, weight=1)
-    ttk.Label(hdr, text="Include/Exclude").grid(row=0, column=0, sticky="w")
-    ttk.Label(hdr, text="Column").grid(row=0, column=1, sticky="w", padx=(6, 0))
-    ttk.Label(hdr, text="Operator").grid(row=0, column=2, sticky="w", padx=(6, 0))
-    ttk.Label(hdr, text="Value").grid(row=0, column=3, sticky="w", padx=(6, 0))
+
+    # Tooltips on header labels for the rules columns
+    from gui.mixins.editor_mixin import (
+        _TIP_RULE_MODE, _TIP_RULE_COL, _TIP_RULE_OP, _TIP_RULE_VAL,
+    )
+    lbl_inc_exc = ttk.Label(hdr, text="Include/Exclude")
+    lbl_inc_exc.grid(row=0, column=0, sticky="w")
+    add_tooltip(lbl_inc_exc, _TIP_RULE_MODE)
+    lbl_rule_col = ttk.Label(hdr, text="Column")
+    lbl_rule_col.grid(row=0, column=1, sticky="w", padx=(6, 0))
+    add_tooltip(lbl_rule_col, _TIP_RULE_COL)
+    lbl_rule_op = ttk.Label(hdr, text="Operator")
+    lbl_rule_op.grid(row=0, column=2, sticky="w", padx=(6, 0))
+    add_tooltip(lbl_rule_op, _TIP_RULE_OP)
+    lbl_rule_val = ttk.Label(hdr, text="Value")
+    lbl_rule_val.grid(row=0, column=3, sticky="w", padx=(6, 0))
+    add_tooltip(lbl_rule_val, _TIP_RULE_VAL)
 
     # Scrollable rules area
     rules_area = ttk.Frame(app.rules_box)
@@ -206,18 +266,24 @@ def build_ui(app) -> None:
     app.dest_box.grid(row=3, column=0, sticky="ew", pady=(10, 0))
     app.dest_box.columnconfigure(1, weight=1)
 
-    ttk.Label(app.dest_box, text="File:").grid(row=0, column=0, sticky="w")
+    lbl_dest_file = ttk.Label(app.dest_box, text="File:")
+    lbl_dest_file.grid(row=0, column=0, sticky="w")
+    add_tooltip(lbl_dest_file, _TIP_DEST_FILE)
     app.dest_file_var = tk.StringVar()
     ttk.Entry(app.dest_box, textvariable=app.dest_file_var).grid(row=0, column=1, sticky="ew", padx=(10, 10))
     ttk.Button(app.dest_box, text="Browse", command=app.browse_destination).grid(row=0, column=2, sticky="ew")
     app.dest_file_var.trace_add("write", app._push_editor_to_sheet)
 
-    ttk.Label(app.dest_box, text="Sheet Name:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+    lbl_dest_sheet = ttk.Label(app.dest_box, text="Sheet Name:")
+    lbl_dest_sheet.grid(row=1, column=0, sticky="w", pady=(6, 0))
+    add_tooltip(lbl_dest_sheet, _TIP_DEST_SHEET)
     app.dest_sheet_var = tk.StringVar()
     ttk.Entry(app.dest_box, textvariable=app.dest_sheet_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(10, 0), pady=(6, 0))
     app.dest_sheet_var.trace_add("write", app._push_editor_to_sheet)
 
-    ttk.Label(app.dest_box, text="Start Column (e.g., A, D, AA):").grid(row=2, column=0, sticky="w", pady=(6, 0))
+    lbl_start_col = ttk.Label(app.dest_box, text="Start Column (e.g., A, D, AA):")
+    lbl_start_col.grid(row=2, column=0, sticky="w", pady=(6, 0))
+    add_tooltip(lbl_start_col, _TIP_START_COL)
     start_frame = ttk.Frame(app.dest_box)
     start_frame.grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=(6, 0))
 
@@ -231,7 +297,9 @@ def build_ui(app) -> None:
             app.start_col_var.set(up)
     app.start_col_var.trace_add("write", _cap_start_col)
 
-    ttk.Label(start_frame, text="Start Row:").grid(row=0, column=1, sticky="w", padx=(15, 6))
+    lbl_start_row = ttk.Label(start_frame, text="Start Row:")
+    lbl_start_row.grid(row=0, column=1, sticky="w", padx=(15, 6))
+    add_tooltip(lbl_start_row, _TIP_START_ROW)
     app.start_row_var = tk.StringVar()
     ttk.Entry(start_frame, textvariable=app.start_row_var, width=10).grid(row=0, column=2, sticky="w")
     app.start_row_var.trace_add("write", app._push_editor_to_sheet)
